@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/432539/gpt2api/internal/account"
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
@@ -99,6 +100,9 @@ func main() {
 
 	accDAO := account.NewDAO(sqldb)
 	accSvc := account.NewService(accDAO, cipher)
+	poolDAO := accountpool.NewDAO(sqldb)
+	poolSvc := accountpool.NewService(poolDAO)
+	poolH := accountpool.NewHTTPHandler(poolSvc)
 
 	keyDAO := apikey.NewDAO(sqldb)
 	keySvc := apikey.NewService(keyDAO)
@@ -172,6 +176,9 @@ func main() {
 	adminUsageH := usage.NewAdminHandler(usageQDAO)
 	meUsageH := usage.NewMeHandler(usageQDAO)
 	meImageH := image.NewMeHandler(imageDAO)
+	meImageH.SetURLBuilder(func(taskID string, idx int) string {
+		return gateway.BuildImageProxyURL(taskID, idx, gateway.ImageProxyTTL)
+	})
 
 	mailSvc := mailer.New(mailer.Config{
 		Host:     cfg.SMTP.Host,
@@ -245,6 +252,13 @@ func main() {
 	accountH.SetProber(accQuota)
 	accountH.SetSettings(settingsSvc)
 	accountH.SetProxyResolver(acctProxyResolver)
+	accountH.SetImportCore(account.NewUnifiedImportCore(
+		accSvc,
+		poolSvc,
+		accRefresher,
+		accQuota,
+		settingsSvc.AccountRefreshAheadSec,
+	))
 
 	// 把 resolver 注入到图片代理端点:下载图片时按 account_id 解出 AT/cookies/proxy。
 	imagesH.ImageAccResolver = acctProxyResolver
@@ -261,10 +275,11 @@ func main() {
 		AuthH: auth.NewHandler(authSvc),
 		UserH: user.NewHandler(userDAO),
 
-		KeySvc:   keySvc,
-		KeyH:     apikey.NewHandler(keySvc),
-		ProxyH:   proxyH,
-		AccountH: accountH,
+		KeySvc:       keySvc,
+		KeyH:         apikey.NewHandler(keySvc),
+		ProxyH:       proxyH,
+		AccountH:     accountH,
+		AccountPoolH: poolH,
 
 		GatewayH: gwH,
 		ImagesH:  imagesH,
