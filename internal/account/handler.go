@@ -47,6 +47,30 @@ func NewHandler(s *Service) *Handler {
 	return h
 }
 
+type importSummaryResponse struct {
+	Total   int                      `json:"total"`
+	Created int                      `json:"created"`
+	Updated int                      `json:"updated"`
+	Skipped int                      `json:"skipped"`
+	Failed  int                      `json:"failed"`
+	Results []importSummaryResultRow `json:"results"`
+}
+
+type importSummaryResultRow struct {
+	Index      int      `json:"index"`
+	Email      string   `json:"email"`
+	Status     string   `json:"status"`
+	Reason     string   `json:"reason,omitempty"`
+	ID         uint64   `json:"id,omitempty"`
+	SourceType string   `json:"source_type,omitempty"`
+	SourceRef  string   `json:"source_ref,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
+type importResultSourceMeta struct {
+	sourceTypeByRef map[string]string
+}
+
 // SetRefresher 注入刷新器(可选,未注入时相关接口返回 501)。
 func (h *Handler) SetRefresher(r *Refresher) { h.refresher = r }
 
@@ -66,7 +90,10 @@ func (h *Handler) SetImportCore(core ImportCore) { h.importCore = core }
 func (h *Handler) Create(c *gin.Context) {
 	var req struct {
 		CreateInput
-		TargetPoolID uint64 `json:"target_pool_id"`
+		TargetPoolID    uint64 `json:"target_pool_id"`
+		ResolveIdentity *bool  `json:"resolve_identity"`
+		KickRefresh     *bool  `json:"kick_refresh"`
+		KickQuotaProbe  *bool  `json:"kick_quota_probe"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
@@ -102,9 +129,9 @@ func (h *Handler) Create(c *gin.Context) {
 		DefaultProxyID:    req.ProxyID,
 		TargetPoolID:      req.TargetPoolID,
 		SkipExpiredATOnly: true,
-		ResolveIdentity:   true,
-		KickRefresh:       true,
-		KickQuotaProbe:    true,
+		ResolveIdentity:   boolValueOrDefault(req.ResolveIdentity, false),
+		KickRefresh:       boolValueOrDefault(req.KickRefresh, true),
+		KickQuotaProbe:    boolValueOrDefault(req.KickQuotaProbe, true),
 	})
 	if err != nil {
 		resp.Internal(c, err.Error())
@@ -315,10 +342,14 @@ func (h *Handler) UnbindProxy(c *gin.Context) {
 func (h *Handler) Import(c *gin.Context) {
 	var req struct {
 		Text            string `json:"text"`
+		SourceKind      string `json:"source_kind"`
 		UpdateExisting  *bool  `json:"update_existing"`
 		DefaultClientID string `json:"default_client_id"`
 		DefaultProxyID  uint64 `json:"default_proxy_id"`
 		TargetPoolID    uint64 `json:"target_pool_id"`
+		ResolveIdentity *bool  `json:"resolve_identity"`
+		KickRefresh     *bool  `json:"kick_refresh"`
+		KickQuotaProbe  *bool  `json:"kick_quota_probe"`
 	}
 	// 支持 JSON body 或 multipart
 	ct := c.ContentType()
@@ -330,9 +361,9 @@ func (h *Handler) Import(c *gin.Context) {
 	} else {
 		// multipart 表单
 		req.Text = c.PostForm("text")
+		req.SourceKind = c.PostForm("source_kind")
 		if v := c.PostForm("update_existing"); v != "" {
-			b := v == "true" || v == "1"
-			req.UpdateExisting = &b
+			req.UpdateExisting = parseOptionalBoolValue(v)
 		}
 		req.DefaultClientID = c.PostForm("default_client_id")
 		if v := c.PostForm("default_proxy_id"); v != "" {
@@ -344,6 +375,15 @@ func (h *Handler) Import(c *gin.Context) {
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				req.TargetPoolID = n
 			}
+		}
+		if v := c.PostForm("resolve_identity"); v != "" {
+			req.ResolveIdentity = parseOptionalBoolValue(v)
+		}
+		if v := c.PostForm("kick_refresh"); v != "" {
+			req.KickRefresh = parseOptionalBoolValue(v)
+		}
+		if v := c.PostForm("kick_quota_probe"); v != "" {
+			req.KickQuotaProbe = parseOptionalBoolValue(v)
 		}
 		// 多文件合并:允许前端一次上传 N 个 json
 		if form, err := c.MultipartForm(); err == nil && form != nil {
@@ -396,16 +436,16 @@ func (h *Handler) Import(c *gin.Context) {
 		DefaultProxyID:    req.DefaultProxyID,
 		TargetPoolID:      req.TargetPoolID,
 		SkipExpiredATOnly: true,
-		ResolveIdentity:   true,
-		KickRefresh:       true,
-		KickQuotaProbe:    true,
+		ResolveIdentity:   boolValueOrDefault(req.ResolveIdentity, true),
+		KickRefresh:       boolValueOrDefault(req.KickRefresh, true),
+		KickQuotaProbe:    boolValueOrDefault(req.KickQuotaProbe, true),
 	})
 	if err != nil {
 		resp.Internal(c, err.Error())
 		return
 	}
 
-	resp.OK(c, importSummaryFromCore(result))
+	resp.OK(c, importSummaryFromCore(result, candidates))
 }
 
 // POST /api/admin/accounts/import-tokens
@@ -423,12 +463,15 @@ func (h *Handler) Import(c *gin.Context) {
 // 返回同 /import:ImportSummary。
 func (h *Handler) ImportTokens(c *gin.Context) {
 	var req struct {
-		Mode           string          `json:"mode"`
-		Tokens         json.RawMessage `json:"tokens"`
-		ClientID       string          `json:"client_id"`
-		UpdateExisting *bool           `json:"update_existing"`
-		DefaultProxyID uint64          `json:"default_proxy_id"`
-		TargetPoolID   uint64          `json:"target_pool_id"`
+		Mode            string          `json:"mode"`
+		Tokens          json.RawMessage `json:"tokens"`
+		ClientID        string          `json:"client_id"`
+		UpdateExisting  *bool           `json:"update_existing"`
+		DefaultProxyID  uint64          `json:"default_proxy_id"`
+		TargetPoolID    uint64          `json:"target_pool_id"`
+		ResolveIdentity *bool           `json:"resolve_identity"`
+		KickRefresh     *bool           `json:"kick_refresh"`
+		KickQuotaProbe  *bool           `json:"kick_quota_probe"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
@@ -489,15 +532,15 @@ func (h *Handler) ImportTokens(c *gin.Context) {
 			DefaultProxyID:    req.DefaultProxyID,
 			TargetPoolID:      req.TargetPoolID,
 			SkipExpiredATOnly: true,
-			ResolveIdentity:   true,
-			KickRefresh:       true,
-			KickQuotaProbe:    true,
+			ResolveIdentity:   boolValueOrDefault(req.ResolveIdentity, true),
+			KickRefresh:       boolValueOrDefault(req.KickRefresh, true),
+			KickQuotaProbe:    boolValueOrDefault(req.KickQuotaProbe, true),
 		})
 		if err != nil {
 			resp.Internal(c, err.Error())
 			return
 		}
-		summary = mergeImportSummary(summary, result)
+		summary = mergeImportSummary(summary, result, candidates)
 	}
 	resp.OK(c, summary)
 }
@@ -532,17 +575,18 @@ func (h *Handler) fetchAccount(ctx context.Context, id uint64) (*Account, error)
 	return h.svc.Get(ctx, id)
 }
 
-func importSummaryFromCore(result *importcore.ImportResult) *ImportSummary {
-	return mergeImportSummary(nil, result)
+func importSummaryFromCore(result *importcore.ImportResult, candidates []importcore.ImportCandidate) *importSummaryResponse {
+	return mergeImportSummary(newImportSummaryResponse(), result, candidates)
 }
 
-func mergeImportSummary(summary *ImportSummary, result *importcore.ImportResult) *ImportSummary {
+func mergeImportSummary(summary *importSummaryResponse, result *importcore.ImportResult, candidates []importcore.ImportCandidate) *importSummaryResponse {
 	if summary == nil {
-		summary = &ImportSummary{Results: make([]ImportLineResult, 0)}
+		summary = newImportSummaryResponse()
 	}
 	if result == nil {
 		return summary
 	}
+	meta := buildImportResultSourceMeta(candidates)
 	base := len(summary.Results)
 	summary.Total += result.Total
 	summary.Created += result.Created
@@ -550,14 +594,82 @@ func mergeImportSummary(summary *ImportSummary, result *importcore.ImportResult)
 	summary.Skipped += result.Skipped
 	summary.Failed += result.Failed
 	for i, line := range result.Results {
-		summary.Results = append(summary.Results, ImportLineResult{
-			Index:  base + i,
-			Email:  line.Email,
-			Status: line.Status,
-			Reason: line.Reason,
-			ID:     line.ID,
-		})
+		row := importSummaryResultRow{
+			Index:      base + i,
+			Email:      line.Email,
+			Status:     line.Status,
+			Reason:     line.Reason,
+			ID:         line.ID,
+			SourceType: meta.sourceType(line.Source),
+			SourceRef:  line.Source,
+		}
+		if line.Warning != "" {
+			row.Warnings = []string{line.Warning}
+		}
+		summary.Results = append(summary.Results, row)
 	}
+	return summary
+}
+
+func newImportSummaryResponse() *importSummaryResponse {
+	return &importSummaryResponse{Results: make([]importSummaryResultRow, 0)}
+}
+
+func buildImportResultSourceMeta(candidates []importcore.ImportCandidate) importResultSourceMeta {
+	meta := importResultSourceMeta{sourceTypeByRef: make(map[string]string, len(candidates))}
+	for _, candidate := range candidates {
+		if candidate.SourceRef == "" || candidate.SourceType == "" {
+			continue
+		}
+		meta.sourceTypeByRef[candidate.SourceRef] = candidate.SourceType
+	}
+	return meta
+}
+
+func (m importResultSourceMeta) sourceType(sourceRef string) string {
+	if sourceRef == "" {
+		return ""
+	}
+	return m.sourceTypeByRef[sourceRef]
+}
+
+func boolValueOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func parseOptionalBoolValue(raw string) *bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		value := true
+		return &value
+	case "0", "false", "no", "off":
+		value := false
+		return &value
+	default:
+		return nil
+	}
+}
+
+func appendImportSummaryRow(summary *importSummaryResponse, row importSummaryResultRow) *importSummaryResponse {
+	if summary == nil {
+		summary = newImportSummaryResponse()
+	}
+	row.Index = len(summary.Results)
+	summary.Results = append(summary.Results, row)
+	switch row.Status {
+	case "created":
+		summary.Created++
+	case "updated":
+		summary.Updated++
+	case "skipped":
+		summary.Skipped++
+	case "failed":
+		summary.Failed++
+	}
+	summary.Total++
 	return summary
 }
 

@@ -67,10 +67,10 @@ func (s *Service) ImportTokensBatch(ctx context.Context, tokens []string, opts I
 		DefaultProxyID:  opts.DefaultProxyID,
 		BatchSize:       opts.BatchSize,
 	})
-	return mergeImportTokenSummaries(summary, batch)
+	return legacyImportSummary(mergeLegacyBatchIntoImportSummary(summary, batch))
 }
 
-func buildImportTokenCandidates(ctx context.Context, tokens []string, opts ImportTokensOptions) ([]importcore.ImportCandidate, *ImportSummary) {
+func buildImportTokenCandidates(ctx context.Context, tokens []string, opts ImportTokensOptions) ([]importcore.ImportCandidate, *importSummaryResponse) {
 	if opts.Mode == "" {
 		opts.Mode = ImportModeAT
 	}
@@ -101,7 +101,7 @@ func buildImportTokenCandidates(ctx context.Context, tokens []string, opts Impor
 		cleaned = append(cleaned, t)
 	}
 
-	sum := &ImportSummary{Results: make([]ImportLineResult, 0, len(cleaned))}
+	sum := newImportSummaryResponse()
 	candidates := make([]importcore.ImportCandidate, 0, len(cleaned))
 
 	// RT 模式先强制校验 client_id
@@ -132,13 +132,12 @@ func buildImportTokenCandidates(ctx context.Context, tokens []string, opts Impor
 			err = fmt.Errorf("未知模式:%s", opts.Mode)
 		}
 		if err != nil {
-			sum.Failed++
-			sum.Total++
-			sum.Results = append(sum.Results, ImportLineResult{
-				Index:  idx,
-				Email:  "?",
-				Status: "failed",
-				Reason: truncate(err.Error(), 160),
+			sum = appendImportSummaryRow(sum, importSummaryResultRow{
+				Email:      "?",
+				Status:     "failed",
+				Reason:     truncate(err.Error(), 160),
+				SourceType: importTokenSourceType(opts.Mode),
+				SourceRef:  fmt.Sprintf("line:%d", idx+1),
 			})
 			continue
 		}
@@ -228,20 +227,57 @@ func convertSTToCandidate(ctx context.Context, httpc *http.Client, st, clientID 
 	}, nil
 }
 
-func mergeImportTokenSummaries(base, extra *ImportSummary) *ImportSummary {
+func importTokenSourceType(mode ImportTokenMode) string {
+	switch mode {
+	case ImportModeRT:
+		return "refresh_token_text"
+	case ImportModeST:
+		return "session_token_text"
+	default:
+		return "access_token_text"
+	}
+}
+
+func mergeLegacyBatchIntoImportSummary(base *importSummaryResponse, extra *ImportSummary) *importSummaryResponse {
 	if base == nil {
-		base = &ImportSummary{Results: make([]ImportLineResult, 0)}
+		base = newImportSummaryResponse()
 	}
 	if extra == nil {
 		return base
 	}
-	base.Total += extra.Total
-	base.Created += extra.Created
-	base.Updated += extra.Updated
-	base.Skipped += extra.Skipped
-	base.Failed += extra.Failed
-	base.Results = append(base.Results, extra.Results...)
+	for _, row := range extra.Results {
+		base = appendImportSummaryRow(base, importSummaryResultRow{
+			Email:  row.Email,
+			Status: row.Status,
+			Reason: row.Reason,
+			ID:     row.ID,
+		})
+	}
 	return base
+}
+
+func legacyImportSummary(summary *importSummaryResponse) *ImportSummary {
+	if summary == nil {
+		return &ImportSummary{Results: make([]ImportLineResult, 0)}
+	}
+	out := &ImportSummary{
+		Total:   summary.Total,
+		Created: summary.Created,
+		Updated: summary.Updated,
+		Skipped: summary.Skipped,
+		Failed:  summary.Failed,
+		Results: make([]ImportLineResult, 0, len(summary.Results)),
+	}
+	for i, row := range summary.Results {
+		out.Results = append(out.Results, ImportLineResult{
+			Index:  i,
+			Email:  row.Email,
+			Status: row.Status,
+			Reason: row.Reason,
+			ID:     row.ID,
+		})
+	}
+	return out
 }
 
 // ---------- 底层 HTTP ----------

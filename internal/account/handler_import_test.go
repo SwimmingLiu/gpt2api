@@ -46,14 +46,20 @@ func TestImportTokensEndpointPreservesSummaryShape(t *testing.T) {
 		result: &importcore.ImportResult{
 			Total:   1,
 			Created: 1,
-			Results: []importcore.ImportLineResult{{Email: "user@example.com", Status: "created", ID: 9}},
+			Results: []importcore.ImportLineResult{{
+				Email:   "user@example.com",
+				Source:  "line:1",
+				Status:  "created",
+				Warning: "token_expiry_unknown",
+				ID:      9,
+			}},
 		},
 	}
 	r := gin.New()
 	r.POST("/api/admin/accounts/import-tokens", h.ImportTokens)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts/import-tokens",
-		strings.NewReader(`{"mode":"at","tokens":"`+token+`","target_pool_id":7}`))
+		strings.NewReader(`{"mode":"at","tokens":"`+token+`","target_pool_id":7,"resolve_identity":false,"kick_refresh":false,"kick_quota_probe":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -63,6 +69,20 @@ func TestImportTokensEndpointPreservesSummaryShape(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"created":1`) || !strings.Contains(w.Body.String(), `"total":1`) {
 		t.Fatalf("unexpected response body: %s", w.Body.String())
+	}
+	if h.importCore.(*fakeImportCore).gotOptions.ResolveIdentity || h.importCore.(*fakeImportCore).gotOptions.KickRefresh || h.importCore.(*fakeImportCore).gotOptions.KickQuotaProbe {
+		t.Fatalf("expected token import advanced options to honor request, got %+v", h.importCore.(*fakeImportCore).gotOptions)
+	}
+	body := decodeImportSummaryBody(t, w.Body.Bytes())
+	if len(body.Data.Results) != 1 {
+		t.Fatalf("expected 1 result row, got %+v", body.Data.Results)
+	}
+	row := body.Data.Results[0]
+	if row.SourceType != "access_token_text" || row.SourceRef != "line:1" {
+		t.Fatalf("expected metadata fields preserved, got %+v", row)
+	}
+	if len(row.Warnings) != 1 || row.Warnings[0] != "token_expiry_unknown" {
+		t.Fatalf("expected warnings preserved, got %+v", row.Warnings)
 	}
 }
 
@@ -108,7 +128,13 @@ func TestImportEndpointUsesUnifiedImportCore(t *testing.T) {
 		result: &importcore.ImportResult{
 			Total:   1,
 			Created: 1,
-			Results: []importcore.ImportLineResult{{Email: "user@example.com", Status: "created", ID: 10}},
+			Results: []importcore.ImportLineResult{{
+				Email:   "user@example.com",
+				Source:  "inline",
+				Status:  "created",
+				Warning: "access_token_expiring_soon",
+				ID:      10,
+			}},
 		},
 	}
 	h := NewHandler(nil)
@@ -118,7 +144,7 @@ func TestImportEndpointUsesUnifiedImportCore(t *testing.T) {
 	r.POST("/api/admin/accounts/import", h.Import)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts/import",
-		strings.NewReader(`{"text":"{\"access_token\":\"tok-a\",\"email\":\"user@example.com\"}","update_existing":false,"default_proxy_id":5,"target_pool_id":7}`))
+		strings.NewReader(`{"text":"{\"access_token\":\"tok-a\",\"email\":\"user@example.com\"}","source_kind":"auto","update_existing":false,"default_proxy_id":5,"target_pool_id":7,"resolve_identity":false,"kick_refresh":false,"kick_quota_probe":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -132,8 +158,22 @@ func TestImportEndpointUsesUnifiedImportCore(t *testing.T) {
 	if fakeCore.gotOptions.DefaultProxyID != 5 || fakeCore.gotOptions.TargetPoolID != 7 {
 		t.Fatalf("unexpected import options: %+v", fakeCore.gotOptions)
 	}
+	if fakeCore.gotOptions.ResolveIdentity || fakeCore.gotOptions.KickRefresh || fakeCore.gotOptions.KickQuotaProbe {
+		t.Fatalf("expected advanced options to honor request, got %+v", fakeCore.gotOptions)
+	}
 	if !strings.Contains(w.Body.String(), `"created":1`) || !strings.Contains(w.Body.String(), `"total":1`) {
 		t.Fatalf("unexpected response body: %s", w.Body.String())
+	}
+	body := decodeImportSummaryBody(t, w.Body.Bytes())
+	if len(body.Data.Results) != 1 {
+		t.Fatalf("expected 1 result row, got %+v", body.Data.Results)
+	}
+	row := body.Data.Results[0]
+	if row.SourceType != "cpa_file" || row.SourceRef != "inline" {
+		t.Fatalf("expected import metadata fields preserved, got %+v", row)
+	}
+	if len(row.Warnings) != 1 || row.Warnings[0] != "access_token_expiring_soon" {
+		t.Fatalf("expected warnings preserved, got %+v", row.Warnings)
 	}
 }
 
@@ -211,7 +251,7 @@ func TestCreateEndpointUsesUnifiedImportCore(t *testing.T) {
 	r.POST("/api/admin/accounts", h.Create)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts",
-		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3,"target_pool_id":7,"daily_image_quota":234,"notes":"operator-note","update_existing":true}`))
+		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3,"target_pool_id":7,"daily_image_quota":234,"notes":"operator-note","resolve_identity":false,"kick_refresh":false,"kick_quota_probe":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -224,6 +264,9 @@ func TestCreateEndpointUsesUnifiedImportCore(t *testing.T) {
 	}
 	if fakeCore.gotOptions.DefaultProxyID != 3 || fakeCore.gotOptions.TargetPoolID != 7 || fakeCore.gotOptions.UpdateExisting {
 		t.Fatalf("unexpected import options: %+v", fakeCore.gotOptions)
+	}
+	if fakeCore.gotOptions.ResolveIdentity || fakeCore.gotOptions.KickRefresh || fakeCore.gotOptions.KickQuotaProbe {
+		t.Fatalf("expected manual create to forward supported options, got %+v", fakeCore.gotOptions)
 	}
 	notes, quota, ok := decodeManualCreateCompat(fakeCore.gotCandidates[0])
 	if !ok || notes != "operator-note" || quota != 234 {
@@ -290,4 +333,23 @@ func testJWT(t *testing.T, claims map[string]any) string {
 	}
 	return base64.RawURLEncoding.EncodeToString(header) + "." +
 		base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+type importSummaryBody struct {
+	Data struct {
+		Results []struct {
+			SourceType string   `json:"source_type"`
+			SourceRef  string   `json:"source_ref"`
+			Warnings   []string `json:"warnings"`
+		} `json:"results"`
+	} `json:"data"`
+}
+
+func decodeImportSummaryBody(t *testing.T, raw []byte) importSummaryBody {
+	t.Helper()
+	var body importSummaryBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("json.Unmarshal response: %v body=%s", err, string(raw))
+	}
+	return body
 }
