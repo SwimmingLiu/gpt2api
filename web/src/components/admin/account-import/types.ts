@@ -49,11 +49,34 @@ export interface ManualAccountForm {
   plan_type: string
   daily_image_quota?: number
   notes: string
-  proxy_id?: number
 }
 
-export interface DialogSubmitPayload {
-  kind: ImportPaneKind
+export interface AccessTokenDialogSubmitPayload {
+  kind: 'access_token'
   advanced: ImportAdvancedOptions
-  payload: AccessTokenImportModel | FileImportModel | ManualAccountForm
+  payload: AccessTokenImportModel
 }
+
+export interface CPAImportDialogSubmitPayload {
+  kind: 'cpa'
+  advanced: ImportAdvancedOptions
+  payload: FileImportModel
+}
+
+export interface Sub2APIImportDialogSubmitPayload {
+  kind: 'sub2api'
+  advanced: ImportAdvancedOptions
+  payload: FileImportModel
+}
+
+export interface ManualDialogSubmitPayload {
+  kind: 'manual'
+  advanced: ImportAdvancedOptions
+  payload: ManualAccountForm
+}
+
+export type DialogSubmitPayload =
+  | AccessTokenDialogSubmitPayload
+  | CPAImportDialogSubmitPayload
+  | Sub2APIImportDialogSubmitPayload
+  | ManualDialogSubmitPayload

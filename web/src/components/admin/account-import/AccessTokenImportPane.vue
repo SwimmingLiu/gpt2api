@@ -40,6 +40,7 @@ const tokenCount = computed(() =>
           :disabled="disabled"
           placeholder="RT 模式必填，AT/ST 可选"
         />
+        <div v-if="model.mode === 'rt'" class="pane-hint">当前为 RT 模式，提交前必须提供 client_id。</div>
       </el-form-item>
 
       <el-form-item label="Token 列表">

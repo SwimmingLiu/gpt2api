@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElMessage } from 'element-plus'
 import { computed, reactive, ref, watch } from 'vue'
 import AccessTokenImportPane from './AccessTokenImportPane.vue'
 import CPAImportPane from './CPAImportPane.vue'
@@ -81,7 +82,6 @@ const manualModel = reactive<ManualAccountForm>({
   plan_type: 'plus',
   daily_image_quota: 100,
   notes: '',
-  proxy_id: undefined,
 })
 
 const filteredRows = computed(() => {
@@ -115,7 +115,44 @@ function buildPayload(): DialogSubmitPayload {
   }
 }
 
+function normalizedTokenLines(text: string) {
+  return text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function validateBeforeSubmit() {
+  if (activePane.value === 'access_token') {
+    const tokens = normalizedTokenLines(accessTokenModel.tokens_text)
+    if (tokens.length === 0) {
+      ElMessage.warning('请至少提供一条 token')
+      return false
+    }
+    if (accessTokenModel.mode === 'rt' && !accessTokenModel.client_id.trim()) {
+      ElMessage.warning('RT 模式必须填写 client_id')
+      return false
+    }
+    return true
+  }
+
+  if (activePane.value === 'manual') {
+    if (!manualModel.email.trim()) {
+      ElMessage.warning('手动新增必须填写邮箱')
+      return false
+    }
+    if (!manualModel.auth_token.trim()) {
+      ElMessage.warning('手动新增至少需要提供 access_token')
+      return false
+    }
+    return true
+  }
+
+  return true
+}
+
 function onSubmit() {
+  if (!validateBeforeSubmit()) return
   emit('submit', buildPayload())
 }
 </script>
@@ -135,11 +172,7 @@ function onSubmit() {
             <Sub2APIImportPane v-model="sub2apiModel" :disabled="loading" />
           </el-tab-pane>
           <el-tab-pane label="手动新增" name="manual">
-            <ManualAccountPane
-              v-model="manualModel"
-              :disabled="loading"
-              :proxy-options="proxyOptions"
-            />
+            <ManualAccountPane v-model="manualModel" :disabled="loading" />
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -175,6 +208,11 @@ function onSubmit() {
           </template>
         </el-table-column>
         <el-table-column label="邮箱" prop="email" min-width="180" />
+        <el-table-column label="来源引用" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.source_ref || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" min-width="110">
           <template #default="{ row }">
             <el-tag
@@ -183,6 +221,11 @@ function onSubmit() {
             >
               {{ row.status }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="警告" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.warnings?.join('；') || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="原因" prop="reason" min-width="220" show-overflow-tooltip />

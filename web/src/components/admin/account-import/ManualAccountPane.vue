@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ManualAccountForm, SelectOption } from './types'
+import type { ManualAccountForm } from './types'
 
 const model = defineModel<ManualAccountForm>({
   required: true,
@@ -8,11 +8,9 @@ const model = defineModel<ManualAccountForm>({
 withDefaults(
   defineProps<{
     disabled?: boolean
-    proxyOptions?: SelectOption[]
   }>(),
   {
     disabled: false,
-    proxyOptions: () => [],
   },
 )
 </script>
@@ -68,25 +66,6 @@ withDefaults(
           <el-option label="Plus" value="plus" />
           <el-option label="Team" value="team" />
           <el-option label="Free" value="free" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="默认代理">
-        <el-select
-          v-model="model.proxy_id"
-          clearable
-          filterable
-          placeholder="不指定"
-          :disabled="disabled"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="item in proxyOptions"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-            :disabled="item.disabled"
-          />
         </el-select>
       </el-form-item>
 
