@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/432539/gpt2api/internal/account/importcore"
 )
@@ -108,12 +107,16 @@ func parseAutoJSONSingle(raw []byte) ([]importcore.ImportCandidate, error) {
 		if _, ok := obj["accounts"]; ok {
 			return ParseSub2APIJSON(raw)
 		}
-		var single cpaFile
-		if err := json.Unmarshal(raw, &single); err != nil {
-			return nil, fmt.Errorf("parse token object: %w", err)
-		}
-		if single.hasAccessToken() {
-			return single.toCandidates("inline")
+		if tokenJSONObjectHasAccessToken(obj) {
+			candidates, err := parseTokenJSONCandidates("inline", raw, tokenJSONOptions{
+				sourceType:   "cpa_file",
+				sourceRef:    "inline",
+				requireEmail: true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return candidates, nil
 		}
 		return nil, errors.New("unrecognized json object")
 	default:
@@ -158,62 +161,6 @@ func (a sub2apiAccount) toCandidate() (importcore.ImportCandidate, bool) {
 		AccountType:      normalizeType(a.Name, a.Platform, a.Type),
 		Notes:            strings.TrimSpace(a.Name),
 	}, true
-}
-
-type cpaFile struct {
-	AccessToken   string `json:"access_token"`
-	AccessToken2  string `json:"accessToken"`
-	RefreshToken  string `json:"refresh_token"`
-	RefreshToken2 string `json:"refreshToken"`
-	AccountID     string `json:"account_id"`
-	Email         string `json:"email"`
-	Type          string `json:"type"`
-	ClientID      string `json:"client_id"`
-	ClientID2     string `json:"clientId"`
-	Expired       string `json:"expired"`
-	Expires       string `json:"expires"`
-}
-
-func (c cpaFile) hasAccessToken() bool {
-	return strings.TrimSpace(c.AccessToken) != "" || strings.TrimSpace(c.AccessToken2) != ""
-}
-
-func (c cpaFile) toCandidates(sourceRef string) ([]importcore.ImportCandidate, error) {
-	accessToken := strings.TrimSpace(c.AccessToken)
-	if accessToken == "" {
-		accessToken = strings.TrimSpace(c.AccessToken2)
-	}
-	if accessToken == "" {
-		return nil, errors.New("missing access token")
-	}
-	clientID := strings.TrimSpace(c.ClientID)
-	if clientID == "" {
-		clientID = strings.TrimSpace(c.ClientID2)
-	}
-	refreshToken := strings.TrimSpace(c.RefreshToken)
-	if refreshToken == "" {
-		refreshToken = strings.TrimSpace(c.RefreshToken2)
-	}
-
-	candidate := importcore.ImportCandidate{
-		SourceType:       "cpa_file",
-		SourceRef:        sourceRef,
-		AccessToken:      accessToken,
-		RefreshToken:     refreshToken,
-		Email:            strings.TrimSpace(c.Email),
-		ClientID:         clientID,
-		ChatGPTAccountID: strings.TrimSpace(c.AccountID),
-		AccountType:      strings.ToLower(strings.TrimSpace(c.Type)),
-	}
-	if candidate.AccountType == "" {
-		candidate.AccountType = "codex"
-	}
-	if ts := firstNonEmpty(strings.TrimSpace(c.Expired), strings.TrimSpace(c.Expires)); ts != "" {
-		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			candidate.TokenExpiresAt = &t
-		}
-	}
-	return []importcore.ImportCandidate{candidate}, nil
 }
 
 func emailFromName(name string) string {
