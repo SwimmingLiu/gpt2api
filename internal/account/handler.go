@@ -66,8 +66,7 @@ func (h *Handler) SetImportCore(core ImportCore) { h.importCore = core }
 func (h *Handler) Create(c *gin.Context) {
 	var req struct {
 		CreateInput
-		TargetPoolID   uint64 `json:"target_pool_id"`
-		UpdateExisting *bool  `json:"update_existing"`
+		TargetPoolID uint64 `json:"target_pool_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
@@ -97,10 +96,9 @@ func (h *Handler) Create(c *gin.Context) {
 	if len(candidates) == 1 && candidates[0].PlanType == "" {
 		candidates[0].PlanType = "plus"
 	}
-	updateExisting := req.UpdateExisting != nil && *req.UpdateExisting
 
 	result, err := h.getImportCore().Import(c.Request.Context(), candidates, importcore.ImportOptions{
-		UpdateExisting:    updateExisting,
+		UpdateExisting:    false,
 		DefaultProxyID:    req.ProxyID,
 		TargetPoolID:      req.TargetPoolID,
 		SkipExpiredATOnly: true,

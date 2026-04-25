@@ -211,7 +211,7 @@ func TestCreateEndpointUsesUnifiedImportCore(t *testing.T) {
 	r.POST("/api/admin/accounts", h.Create)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts",
-		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3,"target_pool_id":7,"daily_image_quota":234,"notes":"operator-note"}`))
+		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3,"target_pool_id":7,"daily_image_quota":234,"notes":"operator-note","update_existing":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
