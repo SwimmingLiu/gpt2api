@@ -119,7 +119,7 @@ func TestCreateEndpointUsesUnifiedImportCore(t *testing.T) {
 	r.POST("/api/admin/accounts", h.Create)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/accounts",
-		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3}`))
+		strings.NewReader(`{"email":"user@example.com","auth_token":"tok-a","client_id":"app_manual","proxy_id":3,"target_pool_id":7}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -130,7 +130,7 @@ func TestCreateEndpointUsesUnifiedImportCore(t *testing.T) {
 	if len(fakeCore.gotCandidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(fakeCore.gotCandidates))
 	}
-	if fakeCore.gotOptions.DefaultProxyID != 3 || !fakeCore.gotOptions.UpdateExisting {
+	if fakeCore.gotOptions.DefaultProxyID != 3 || fakeCore.gotOptions.TargetPoolID != 7 || !fakeCore.gotOptions.UpdateExisting {
 		t.Fatalf("unexpected import options: %+v", fakeCore.gotOptions)
 	}
 	if !strings.Contains(w.Body.String(), `"id":9`) || !strings.Contains(w.Body.String(), `"email":"user@example.com"`) {

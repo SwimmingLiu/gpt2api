@@ -63,7 +63,10 @@ func (h *Handler) SetImportCore(core ImportCore) { h.importCore = core }
 
 // POST /api/admin/accounts
 func (h *Handler) Create(c *gin.Context) {
-	var req CreateInput
+	var req struct {
+		CreateInput
+		TargetPoolID uint64 `json:"target_pool_id"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
 		return
@@ -96,6 +99,7 @@ func (h *Handler) Create(c *gin.Context) {
 	result, err := h.getImportCore().Import(c.Request.Context(), candidates, importcore.ImportOptions{
 		UpdateExisting:    true,
 		DefaultProxyID:    req.ProxyID,
+		TargetPoolID:      req.TargetPoolID,
 		SkipExpiredATOnly: true,
 		ResolveIdentity:   true,
 		KickRefresh:       true,
