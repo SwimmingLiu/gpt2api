@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/432539/gpt2api/internal/account/importcore"
 	"github.com/432539/gpt2api/internal/account/importsource"
@@ -65,7 +66,8 @@ func (h *Handler) SetImportCore(core ImportCore) { h.importCore = core }
 func (h *Handler) Create(c *gin.Context) {
 	var req struct {
 		CreateInput
-		TargetPoolID uint64 `json:"target_pool_id"`
+		TargetPoolID   uint64 `json:"target_pool_id"`
+		UpdateExisting *bool  `json:"update_existing"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
@@ -88,16 +90,17 @@ func (h *Handler) Create(c *gin.Context) {
 		PlanType:         req.PlanType,
 		TokenExpiresAt:   nullableTime(expAt),
 		OAISessionID:     req.OAISessionID,
-		OAIDeviceID:      req.OAIDeviceID,
+		OAIDeviceID:      manualCreateDeviceID(req.OAIDeviceID),
 		Cookies:          req.Cookies,
-		Notes:            req.Notes,
+		Notes:            encodeManualCreateCompat(req.Notes, req.DailyImageQuota),
 	})
 	if len(candidates) == 1 && candidates[0].PlanType == "" {
 		candidates[0].PlanType = "plus"
 	}
+	updateExisting := req.UpdateExisting != nil && *req.UpdateExisting
 
 	result, err := h.getImportCore().Import(c.Request.Context(), candidates, importcore.ImportOptions{
-		UpdateExisting:    true,
+		UpdateExisting:    updateExisting,
 		DefaultProxyID:    req.ProxyID,
 		TargetPoolID:      req.TargetPoolID,
 		SkipExpiredATOnly: true,
@@ -590,6 +593,14 @@ func nullableTime(ts time.Time) *time.Time {
 	}
 	value := ts.UTC()
 	return &value
+}
+
+func manualCreateDeviceID(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID != "" {
+		return deviceID
+	}
+	return uuid.NewString()
 }
 
 // ===================== 刷新 / 探测 =====================

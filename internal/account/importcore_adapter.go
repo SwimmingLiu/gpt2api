@@ -3,12 +3,22 @@ package account
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/432539/gpt2api/internal/account/importcore"
 	"github.com/432539/gpt2api/internal/accountpool"
 )
+
+const manualCreateCompatPrefix = "__manual_create_compat__:"
+
+type manualCreateCompat struct {
+	Notes           string `json:"notes"`
+	DailyImageQuota int    `json:"daily_image_quota"`
+}
 
 type importCoreAdapter struct {
 	svc *Service
@@ -49,18 +59,20 @@ func (a *importCoreAdapter) Create(ctx context.Context, candidate importcore.Imp
 	if err != nil {
 		return 0, err
 	}
+	notes := mergeImportedNotes(candidate, "")
+	dailyImageQuota := resolveDailyImageQuota(candidate, 100)
 	account := &Account{
 		Email:            candidate.Email,
 		AuthTokenEnc:     atEnc,
 		ClientID:         defaultClientID(candidate.ClientID),
 		ChatGPTAccountID: candidate.ChatGPTAccountID,
 		AccountType:      defaultAccountType(candidate.AccountType),
-		PlanType:         defaultPlanType(candidate.PlanType),
-		DailyImageQuota:  100,
+		PlanType:         defaultPlanType(candidate),
+		DailyImageQuota:  dailyImageQuota,
 		Status:           StatusHealthy,
 		OAISessionID:     candidate.OAISessionID,
-		OAIDeviceID:      candidate.OAIDeviceID,
-		Notes:            candidate.Notes,
+		OAIDeviceID:      resolveOAIDeviceID(candidate),
+		Notes:            notes,
 	}
 	if candidate.RefreshToken != "" {
 		rtEnc, err := a.svc.cipher.EncryptString(candidate.RefreshToken)
@@ -141,15 +153,16 @@ func (a *importCoreAdapter) Update(ctx context.Context, id uint64, candidate imp
 	if candidate.PlanType != "" {
 		current.PlanType = candidate.PlanType
 	}
+	if quota, ok := manualCreateDailyImageQuota(candidate); ok {
+		current.DailyImageQuota = quota
+	}
 	if candidate.OAISessionID != "" {
 		current.OAISessionID = candidate.OAISessionID
 	}
 	if candidate.OAIDeviceID != "" {
 		current.OAIDeviceID = candidate.OAIDeviceID
 	}
-	if candidate.Notes != "" {
-		current.Notes = candidate.Notes
-	}
+	current.Notes = mergeImportedNotes(candidate, current.Notes)
 	if current.Status == StatusDead || current.Status == StatusSuspicious {
 		current.Status = StatusHealthy
 	}
@@ -251,9 +264,77 @@ func defaultAccountType(accountType string) string {
 	return strings.TrimSpace(accountType)
 }
 
-func defaultPlanType(planType string) string {
-	if strings.TrimSpace(planType) == "" {
+func defaultPlanType(candidate importcore.ImportCandidate) string {
+	if strings.TrimSpace(candidate.PlanType) == "" {
+		if candidate.SourceType == "manual" {
+			return "plus"
+		}
 		return "free"
 	}
-	return strings.TrimSpace(planType)
+	return strings.TrimSpace(candidate.PlanType)
+}
+
+func encodeManualCreateCompat(notes string, dailyImageQuota int) string {
+	payload, _ := json.Marshal(manualCreateCompat{
+		Notes:           strings.TrimSpace(notes),
+		DailyImageQuota: dailyImageQuota,
+	})
+	return manualCreateCompatPrefix + string(payload)
+}
+
+func decodeManualCreateCompat(candidate importcore.ImportCandidate) (string, int, bool) {
+	if candidate.SourceType != "manual" || !strings.HasPrefix(candidate.Notes, manualCreateCompatPrefix) {
+		return "", 0, false
+	}
+	var meta manualCreateCompat
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(candidate.Notes, manualCreateCompatPrefix)), &meta); err != nil {
+		return "", 0, false
+	}
+	return strings.TrimSpace(meta.Notes), meta.DailyImageQuota, true
+}
+
+func mergeImportedNotes(candidate importcore.ImportCandidate, existing string) string {
+	existing = strings.TrimSpace(existing)
+	if notes, _, ok := decodeManualCreateCompat(candidate); ok {
+		if notes != "" {
+			return notes
+		}
+		return existing
+	}
+	imported := strings.TrimSpace(candidate.Notes)
+	if imported == "" {
+		return existing
+	}
+	if existing != "" && candidate.SourceType != "manual" {
+		return existing
+	}
+	return imported
+}
+
+func resolveDailyImageQuota(candidate importcore.ImportCandidate, fallback int) int {
+	if quota, ok := manualCreateDailyImageQuota(candidate); ok {
+		return quota
+	}
+	return fallback
+}
+
+func manualCreateDailyImageQuota(candidate importcore.ImportCandidate) (int, bool) {
+	_, quota, ok := decodeManualCreateCompat(candidate)
+	if !ok {
+		return 0, false
+	}
+	if quota <= 0 {
+		return 100, true
+	}
+	return quota, true
+}
+
+func resolveOAIDeviceID(candidate importcore.ImportCandidate) string {
+	if strings.TrimSpace(candidate.OAIDeviceID) != "" {
+		return strings.TrimSpace(candidate.OAIDeviceID)
+	}
+	if candidate.SourceType == "manual" {
+		return uuid.NewString()
+	}
+	return ""
 }

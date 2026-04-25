@@ -119,12 +119,7 @@ func buildImportTokenCandidates(ctx context.Context, tokens []string, opts Impor
 		var err error
 		switch opts.Mode {
 		case ImportModeAT:
-			src = importcore.ImportCandidate{
-				SourceType:  "access_token_text",
-				SourceRef:   fmt.Sprintf("line:%d", idx+1),
-				AccessToken: t,
-				ClientID:    clientID,
-			}
+			src, err = convertATToCandidate(t, clientID, idx)
 		case ImportModeRT:
 			if clientID == "" {
 				err = errors.New("RT 模式需要 APPID(client_id)")
@@ -153,6 +148,26 @@ func buildImportTokenCandidates(ctx context.Context, tokens []string, opts Impor
 }
 
 // ---------- 三种模式的 token → ImportSource 转换 ----------
+
+func convertATToCandidate(at, clientID string, idx int) (importcore.ImportCandidate, error) {
+	email, subAccountID, expAt, err := decodeATClaims(at)
+	if err != nil {
+		return importcore.ImportCandidate{}, fmt.Errorf("解析 AT 失败:%w", err)
+	}
+	if email == "" {
+		return importcore.ImportCandidate{}, errors.New("无法从 AT 解出 email,请改用 JSON 或带 email 的导入")
+	}
+	return importcore.ImportCandidate{
+		SourceType:       "access_token_text",
+		SourceRef:        fmt.Sprintf("line:%d", idx+1),
+		AccessToken:      at,
+		Email:            email,
+		ChatGPTAccountID: subAccountID,
+		TokenExpiresAt:   nullableTime(expAt),
+		ClientID:         clientID,
+		AccountType:      "chatgpt",
+	}, nil
+}
 
 // convertRTToSource 用 refresh_token + client_id 调 auth.openai.com/oauth/token 换出 AT,
 // 再解 AT claims 拿 email。AT + RT 一起存进账号(后续仍可 RT 续签)。
