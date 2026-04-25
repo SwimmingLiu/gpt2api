@@ -624,3 +624,29 @@ func TestImportDeduplicatesAfterIdentityResolutionLastWins(t *testing.T) {
 		t.Fatalf("expected resolved-email last-wins semantics, got %+v", store.lastCreated)
 	}
 }
+
+func TestImportTreatsSentinelLikePrefixInNotesAsBusinessData(t *testing.T) {
+	store := &fakeStore{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "user@example.com",
+		Notes:       "__importcore_resolve_error__:legit business note",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Created != 1 || result.Failed != 0 {
+		t.Fatalf("expected normal create path, got %+v", result)
+	}
+	if store.lastCreated.Notes != "__importcore_resolve_error__:legit business note" {
+		t.Fatalf("expected notes preserved as business data, got %+v", store.lastCreated)
+	}
+}

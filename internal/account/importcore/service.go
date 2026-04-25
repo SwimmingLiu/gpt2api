@@ -74,7 +74,7 @@ func (s *Service) Import(ctx context.Context, candidates []ImportCandidate, opt 
 	result := &ImportResult{Results: make([]ImportLineResult, 0, len(candidates))}
 	normalized := normalizeCandidates(candidates)
 	resolved := s.resolveCandidates(ctx, normalized, opt)
-	deduped := deduplicateByEmail(resolved)
+	deduped := deduplicatePreparedByEmail(resolved)
 	for _, item := range deduped {
 		line := s.persistOne(ctx, item, opt)
 		result.Results = append(result.Results, line)

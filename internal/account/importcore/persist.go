@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const resolveErrorNotePrefix = "__importcore_resolve_error__:"
-
 type AccountRecord struct {
 	ID               uint64
 	Email            string
@@ -47,6 +45,11 @@ type persistDecision struct {
 	email     string
 }
 
+type preparedCandidate struct {
+	candidate     ImportCandidate
+	failureReason string
+}
+
 func normalizeCandidates(candidates []ImportCandidate) []ImportCandidate {
 	out := make([]ImportCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -78,15 +81,35 @@ func deduplicateByEmail(candidates []ImportCandidate) []ImportCandidate {
 	return out
 }
 
-func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt ImportOptions) ImportLineResult {
+func deduplicatePreparedByEmail(candidates []preparedCandidate) []preparedCandidate {
+	seen := make(map[string]int, len(candidates))
+	out := make([]preparedCandidate, 0, len(candidates))
+	for _, prepared := range candidates {
+		key := prepared.candidate.Email
+		if key == "" {
+			out = append(out, prepared)
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			out[idx] = prepared
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, prepared)
+	}
+	return out
+}
+
+func (s *Service) persistOne(ctx context.Context, prepared preparedCandidate, opt ImportOptions) ImportLineResult {
+	candidate := prepared.candidate
 	line := ImportLineResult{
 		Email:  candidate.Email,
 		Source: candidate.SourceRef,
 	}
 
-	if strings.HasPrefix(candidate.Notes, resolveErrorNotePrefix) {
+	if prepared.failureReason != "" {
 		line.Status = "failed"
-		line.Reason = strings.TrimPrefix(candidate.Notes, resolveErrorNotePrefix)
+		line.Reason = prepared.failureReason
 		return line
 	}
 
@@ -174,17 +197,18 @@ func (s *Service) resolveCandidateIdentity(ctx context.Context, candidate Import
 	return candidate, nil
 }
 
-func (s *Service) resolveCandidates(ctx context.Context, candidates []ImportCandidate, opt ImportOptions) []ImportCandidate {
-	out := make([]ImportCandidate, 0, len(candidates))
+func (s *Service) resolveCandidates(ctx context.Context, candidates []ImportCandidate, opt ImportOptions) []preparedCandidate {
+	out := make([]preparedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		resolved, err := s.resolveCandidateIdentity(ctx, candidate, opt)
 		if err != nil {
-			failed := candidate
-			failed.Notes = resolveErrorNotePrefix + err.Error()
-			out = append(out, failed)
+			out = append(out, preparedCandidate{
+				candidate:     candidate,
+				failureReason: err.Error(),
+			})
 			continue
 		}
-		out = append(out, resolved)
+		out = append(out, preparedCandidate{candidate: resolved})
 	}
 	return out
 }
