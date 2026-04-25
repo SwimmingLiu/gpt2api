@@ -2,6 +2,7 @@ package importcore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -30,6 +31,12 @@ type Store interface {
 	Update(ctx context.Context, id uint64, candidate ImportCandidate, existing *AccountRecord) error
 	BindDefaultProxy(ctx context.Context, accountID, proxyID uint64) error
 }
+
+type IdentityResolver interface {
+	ResolveEmail(ctx context.Context, candidate ImportCandidate) (string, error)
+}
+
+var errIdentityResolverMissing = errors.New("identity_resolution_unavailable")
 
 type persistDecision struct {
 	accountID uint64
@@ -70,16 +77,17 @@ func deduplicateByEmail(candidates []ImportCandidate) []ImportCandidate {
 }
 
 func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt ImportOptions) ImportLineResult {
+	resolvedCandidate, resolveErr := s.resolveCandidateIdentity(ctx, candidate, opt)
 	line := ImportLineResult{
-		Email:  candidate.Email,
-		Source: candidate.SourceRef,
+		Email:  resolvedCandidate.Email,
+		Source: resolvedCandidate.SourceRef,
 	}
-
-	if candidate.Email == "" {
+	if resolveErr != nil {
 		line.Status = "failed"
-		line.Reason = "email_required"
+		line.Reason = resolveErr.Error()
 		return line
 	}
+	candidate = resolvedCandidate
 
 	state := ClassifyCredentialState(candidate, s.now(), s.refreshAheadSec())
 	if opt.SkipExpiredATOnly && state.SkipImport {
@@ -141,4 +149,26 @@ func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt
 	line.Status = decision.status
 	line.Reason = decision.reason
 	return line
+}
+
+func (s *Service) resolveCandidateIdentity(ctx context.Context, candidate ImportCandidate, opt ImportOptions) (ImportCandidate, error) {
+	if candidate.Email != "" {
+		return candidate, nil
+	}
+	if !opt.ResolveIdentity {
+		return candidate, errors.New("email_required_identity_resolution_disabled")
+	}
+	if s.identityResolver == nil {
+		return candidate, errIdentityResolverMissing
+	}
+	email, err := s.identityResolver.ResolveEmail(ctx, candidate)
+	if err != nil {
+		return candidate, err
+	}
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return candidate, errors.New("email_required_identity_unresolved")
+	}
+	candidate.Email = email
+	return candidate, nil
 }

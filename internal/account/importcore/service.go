@@ -25,19 +25,21 @@ type ImportResult struct {
 }
 
 type ServiceDeps struct {
-	Store           Store
-	PoolMembership  PoolMembership
-	Hooks           Hooks
-	Now             func() time.Time
-	RefreshAheadSec func() int
+	Store            Store
+	PoolMembership   PoolMembership
+	Hooks            Hooks
+	IdentityResolver IdentityResolver
+	Now              func() time.Time
+	RefreshAheadSec  func() int
 }
 
 type Service struct {
-	store           Store
-	pools           PoolMembership
-	hooks           Hooks
-	now             func() time.Time
-	refreshAheadSec func() int
+	store            Store
+	pools            PoolMembership
+	hooks            Hooks
+	identityResolver IdentityResolver
+	now              func() time.Time
+	refreshAheadSec  func() int
 }
 
 var errStoreRequired = errors.New("importcore: store is required")
@@ -52,11 +54,12 @@ func NewService(deps ServiceDeps) *Service {
 		refreshAheadFn = func() int { return 0 }
 	}
 	return &Service{
-		store:           deps.Store,
-		pools:           deps.PoolMembership,
-		hooks:           deps.Hooks,
-		now:             nowFn,
-		refreshAheadSec: refreshAheadFn,
+		store:            deps.Store,
+		pools:            deps.PoolMembership,
+		hooks:            deps.Hooks,
+		identityResolver: deps.IdentityResolver,
+		now:              nowFn,
+		refreshAheadSec:  refreshAheadFn,
 	}
 }
 

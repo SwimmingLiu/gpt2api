@@ -40,7 +40,9 @@ func (s *fakeStore) Create(_ context.Context, candidate ImportCandidate) (uint64
 	if s.nextID == 0 {
 		s.nextID = 1
 	}
-	return s.nextID, nil
+	id := s.nextID
+	s.nextID++
+	return id, nil
 }
 
 func (s *fakeStore) Update(_ context.Context, id uint64, candidate ImportCandidate, existing *AccountRecord) error {
@@ -64,7 +66,8 @@ type fakePoolMembership struct {
 		poolID    uint64
 		accountID uint64
 	}
-	addErr error
+	addErr          error
+	failOnAccountID map[uint64]error
 }
 
 func (p *fakePoolMembership) AddDefaultMember(_ context.Context, poolID, accountID uint64) error {
@@ -72,12 +75,31 @@ func (p *fakePoolMembership) AddDefaultMember(_ context.Context, poolID, account
 		poolID    uint64
 		accountID uint64
 	}{poolID: poolID, accountID: accountID})
+	if p.failOnAccountID != nil {
+		if err, ok := p.failOnAccountID[accountID]; ok {
+			return err
+		}
+	}
 	return p.addErr
 }
 
 type fakeHooks struct {
 	refreshCalls    int
 	quotaProbeCalls int
+}
+
+type fakeIdentityResolver struct {
+	resolvedEmail string
+	err           error
+	calls         int
+}
+
+func (r *fakeIdentityResolver) ResolveEmail(_ context.Context, candidate ImportCandidate) (string, error) {
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.resolvedEmail, nil
 }
 
 func (h *fakeHooks) KickRefresh() {
@@ -375,5 +397,123 @@ func TestImportFailsLineWhenStoreMissing(t *testing.T) {
 	}
 	if result.Failed != 1 || result.Results[0].Reason == "" {
 		t.Fatalf("expected explicit missing store failure, got %+v", result)
+	}
+}
+
+func TestImportResolvesIdentityForEmptyEmailWhenEnabled(t *testing.T) {
+	store := &fakeStore{}
+	resolver := &fakeIdentityResolver{resolvedEmail: "resolved@example.com"}
+	core := NewService(ServiceDeps{
+		Store:            store,
+		IdentityResolver: resolver,
+		Now:              time.Now,
+		RefreshAheadSec:  func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       " ",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("expected resolver call, got %+v", resolver)
+	}
+	if result.Created != 1 || store.lastCreated.Email != "resolved@example.com" {
+		t.Fatalf("expected resolved email to be persisted, got result=%+v store=%+v", result, store)
+	}
+}
+
+func TestImportFailsEmptyEmailWhenResolveIdentityDisabled(t *testing.T) {
+	store := &fakeStore{}
+	resolver := &fakeIdentityResolver{resolvedEmail: "resolved@example.com"}
+	core := NewService(ServiceDeps{
+		Store:            store,
+		IdentityResolver: resolver,
+		Now:              time.Now,
+		RefreshAheadSec:  func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "",
+	}}, ImportOptions{ResolveIdentity: false})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("expected resolver not called, got %+v", resolver)
+	}
+	if result.Failed != 1 || result.Results[0].Reason == "" {
+		t.Fatalf("expected explicit failure when identity resolution disabled, got %+v", result)
+	}
+}
+
+func TestImportFailsEmptyEmailWhenResolverMissing(t *testing.T) {
+	store := &fakeStore{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Failed != 1 || result.Results[0].Reason == "" {
+		t.Fatalf("expected explicit failure when resolver missing, got %+v", result)
+	}
+	if len(store.findCalls) != 0 || store.createCalls != 0 {
+		t.Fatalf("expected no persistence calls, got store=%+v", store)
+	}
+}
+
+func TestImportMixedBatchKeepsCountsSaneWhenOnePostprocessFails(t *testing.T) {
+	store := &fakeStore{nextID: 10}
+	pools := &fakePoolMembership{failOnAccountID: map[uint64]error{10: errors.New("pool add failed")}}
+	hooks := &fakeHooks{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		PoolMembership:  pools,
+		Hooks:           hooks,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+	result, err := core.Import(context.Background(), []ImportCandidate{
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:1",
+			AccessToken: "at-1",
+			Email:       "first@example.com",
+		},
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:2",
+			AccessToken: "at-2",
+			Email:       "second@example.com",
+		},
+	}, ImportOptions{TargetPoolID: 7, KickRefresh: true, KickQuotaProbe: true})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Total != 2 || result.Created != 1 || result.Failed != 1 {
+		t.Fatalf("expected one success and one postprocess failure, got %+v", result)
+	}
+	if result.Results[0].Status != "failed" || result.Results[1].Status != "created" {
+		t.Fatalf("unexpected line statuses: %+v", result.Results)
+	}
+	if hooks.refreshCalls != 1 || hooks.quotaProbeCalls != 1 {
+		t.Fatalf("expected hooks to run for remaining success, got %+v", hooks)
 	}
 }
