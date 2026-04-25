@@ -2,6 +2,7 @@ package importcore
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -38,6 +39,8 @@ type Service struct {
 	now             func() time.Time
 	refreshAheadSec func() int
 }
+
+var errStoreRequired = errors.New("importcore: store is required")
 
 func NewService(deps ServiceDeps) *Service {
 	nowFn := deps.Now
@@ -83,6 +86,6 @@ func (s *Service) Import(ctx context.Context, candidates []ImportCandidate, opt 
 		}
 	}
 	result.Total = len(result.Results)
-	s.runPostprocess(ctx, result.Results, opt)
+	s.runPostprocess(ctx, result, opt)
 	return result, nil
 }

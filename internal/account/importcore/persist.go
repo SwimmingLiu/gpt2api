@@ -75,6 +75,12 @@ func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt
 		Source: candidate.SourceRef,
 	}
 
+	if candidate.Email == "" {
+		line.Status = "failed"
+		line.Reason = "email_required"
+		return line
+	}
+
 	state := ClassifyCredentialState(candidate, s.now(), s.refreshAheadSec())
 	if opt.SkipExpiredATOnly && state.SkipImport {
 		line.Status = "skipped"
@@ -83,6 +89,11 @@ func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt
 	}
 	if state.Warning != "" {
 		line.Warning = state.Warning
+	}
+	if s.store == nil {
+		line.Status = "failed"
+		line.Reason = errStoreRequired.Error()
+		return line
 	}
 
 	existing, err := s.store.FindByEmail(ctx, candidate.Email)
@@ -119,8 +130,9 @@ func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt
 
 	if decision.accountID != 0 && decision.status == "created" && opt.DefaultProxyID != 0 {
 		if err := s.store.BindDefaultProxy(ctx, decision.accountID, opt.DefaultProxyID); err != nil {
+			line.ID = decision.accountID
 			line.Status = "failed"
-			line.Reason = err.Error()
+			line.Reason = "default_proxy_bind_failed: " + err.Error()
 			return line
 		}
 	}

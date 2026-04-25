@@ -11,14 +11,26 @@ type Hooks interface {
 	KickQuotaProbe()
 }
 
-func (s *Service) runPostprocess(ctx context.Context, results []ImportLineResult, opt ImportOptions) {
+func (s *Service) runPostprocess(ctx context.Context, result *ImportResult, opt ImportOptions) {
 	createdOrUpdated := false
-	for _, line := range results {
+	for i := range result.Results {
+		line := &result.Results[i]
 		if line.ID == 0 {
 			continue
 		}
 		if opt.TargetPoolID != 0 && s.pools != nil && (line.Status == "created" || line.Status == "updated") {
-			_ = s.pools.AddDefaultMember(ctx, opt.TargetPoolID, line.ID)
+			if err := s.pools.AddDefaultMember(ctx, opt.TargetPoolID, line.ID); err != nil {
+				switch line.Status {
+				case "created":
+					result.Created--
+				case "updated":
+					result.Updated--
+				}
+				result.Failed++
+				line.Status = "failed"
+				line.Reason = "pool_membership_failed: " + err.Error()
+				continue
+			}
 		}
 		if line.Status == "created" || line.Status == "updated" {
 			createdOrUpdated = true

@@ -2,6 +2,7 @@ package importcore
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -16,14 +17,17 @@ type fakeStore struct {
 	}
 	createCalls int
 	updateCalls int
+	findCalls   []string
 	bindCalls   []struct {
 		accountID uint64
 		proxyID   uint64
 	}
-	nextID uint64
+	nextID  uint64
+	bindErr error
 }
 
 func (s *fakeStore) FindByEmail(_ context.Context, email string) (*AccountRecord, error) {
+	s.findCalls = append(s.findCalls, email)
 	if s.findByEmail == nil {
 		return nil, nil
 	}
@@ -52,7 +56,7 @@ func (s *fakeStore) BindDefaultProxy(_ context.Context, accountID, proxyID uint6
 		accountID uint64
 		proxyID   uint64
 	}{accountID: accountID, proxyID: proxyID})
-	return nil
+	return s.bindErr
 }
 
 type fakePoolMembership struct {
@@ -60,6 +64,7 @@ type fakePoolMembership struct {
 		poolID    uint64
 		accountID uint64
 	}
+	addErr error
 }
 
 func (p *fakePoolMembership) AddDefaultMember(_ context.Context, poolID, accountID uint64) error {
@@ -67,7 +72,7 @@ func (p *fakePoolMembership) AddDefaultMember(_ context.Context, poolID, account
 		poolID    uint64
 		accountID uint64
 	}{poolID: poolID, accountID: accountID})
-	return nil
+	return p.addErr
 }
 
 type fakeHooks struct {
@@ -230,5 +235,145 @@ func TestImportSkipsExistingAccountWhenUpdatesDisabled(t *testing.T) {
 	}
 	if result.Results[0].Reason == "" {
 		t.Fatalf("expected skip reason, got %+v", result.Results[0])
+	}
+}
+
+func TestImportDeduplicatesByNormalizedEmailLastWins(t *testing.T) {
+	store := &fakeStore{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:1",
+			AccessToken: "first-at",
+			Email:       " User@Example.com ",
+			Notes:       "first",
+		},
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:2",
+			AccessToken: "second-at",
+			Email:       "user@example.com",
+			Notes:       "second",
+		},
+	}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Total != 1 || result.Created != 1 {
+		t.Fatalf("expected one deduped result, got %+v", result)
+	}
+	if len(store.findCalls) != 1 || store.findCalls[0] != "user@example.com" {
+		t.Fatalf("expected normalized email lookup once, got %+v", store.findCalls)
+	}
+	if store.lastCreated.AccessToken != "second-at" || store.lastCreated.Notes != "second" {
+		t.Fatalf("expected last candidate to win, got %+v", store.lastCreated)
+	}
+}
+
+func TestImportFailsEmptyEmailCandidateBeforePersistence(t *testing.T) {
+	store := &fakeStore{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "   ",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Failed != 1 || result.Results[0].Reason == "" {
+		t.Fatalf("expected empty email failure, got %+v", result)
+	}
+	if len(store.findCalls) != 0 || store.createCalls != 0 || store.updateCalls != 0 {
+		t.Fatalf("expected no persistence calls, got store=%+v", store)
+	}
+}
+
+func TestImportMarksLineFailedWhenPoolPostprocessFails(t *testing.T) {
+	store := &fakeStore{}
+	pools := &fakePoolMembership{addErr: errors.New("pool add failed")}
+	hooks := &fakeHooks{}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		PoolMembership:  pools,
+		Hooks:           hooks,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "user@example.com",
+	}}, ImportOptions{TargetPoolID: 7, KickRefresh: true, KickQuotaProbe: true})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Created != 0 || result.Failed != 1 {
+		t.Fatalf("expected postprocess failure to demote success, got %+v", result)
+	}
+	if result.Results[0].Status != "failed" || result.Results[0].Reason == "" {
+		t.Fatalf("expected explicit failed line, got %+v", result.Results[0])
+	}
+	if hooks.refreshCalls != 0 || hooks.quotaProbeCalls != 0 {
+		t.Fatalf("expected hooks skipped after pool failure, got %+v", hooks)
+	}
+}
+
+func TestImportMarksLineFailedWhenDefaultProxyBindFails(t *testing.T) {
+	store := &fakeStore{bindErr: errors.New("bind proxy failed")}
+	core := NewService(ServiceDeps{
+		Store:           store,
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "user@example.com",
+	}}, ImportOptions{DefaultProxyID: 99})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Created != 0 || result.Failed != 1 {
+		t.Fatalf("expected explicit failure after bind error, got %+v", result)
+	}
+	if result.Results[0].Status != "failed" || result.Results[0].ID != 1 {
+		t.Fatalf("expected failed line with created account id retained, got %+v", result.Results[0])
+	}
+}
+
+func TestImportFailsLineWhenStoreMissing(t *testing.T) {
+	core := NewService(ServiceDeps{
+		Now:             time.Now,
+		RefreshAheadSec: func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+		Email:       "user@example.com",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Failed != 1 || result.Results[0].Reason == "" {
+		t.Fatalf("expected explicit missing store failure, got %+v", result)
 	}
 }
