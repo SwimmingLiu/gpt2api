@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const resolveErrorNotePrefix = "__importcore_resolve_error__:"
+
 type AccountRecord struct {
 	ID               uint64
 	Email            string
@@ -77,17 +79,16 @@ func deduplicateByEmail(candidates []ImportCandidate) []ImportCandidate {
 }
 
 func (s *Service) persistOne(ctx context.Context, candidate ImportCandidate, opt ImportOptions) ImportLineResult {
-	resolvedCandidate, resolveErr := s.resolveCandidateIdentity(ctx, candidate, opt)
 	line := ImportLineResult{
-		Email:  resolvedCandidate.Email,
-		Source: resolvedCandidate.SourceRef,
+		Email:  candidate.Email,
+		Source: candidate.SourceRef,
 	}
-	if resolveErr != nil {
+
+	if strings.HasPrefix(candidate.Notes, resolveErrorNotePrefix) {
 		line.Status = "failed"
-		line.Reason = resolveErr.Error()
+		line.Reason = strings.TrimPrefix(candidate.Notes, resolveErrorNotePrefix)
 		return line
 	}
-	candidate = resolvedCandidate
 
 	state := ClassifyCredentialState(candidate, s.now(), s.refreshAheadSec())
 	if opt.SkipExpiredATOnly && state.SkipImport {
@@ -171,4 +172,19 @@ func (s *Service) resolveCandidateIdentity(ctx context.Context, candidate Import
 	}
 	candidate.Email = email
 	return candidate, nil
+}
+
+func (s *Service) resolveCandidates(ctx context.Context, candidates []ImportCandidate, opt ImportOptions) []ImportCandidate {
+	out := make([]ImportCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		resolved, err := s.resolveCandidateIdentity(ctx, candidate, opt)
+		if err != nil {
+			failed := candidate
+			failed.Notes = resolveErrorNotePrefix + err.Error()
+			out = append(out, failed)
+			continue
+		}
+		out = append(out, resolved)
+	}
+	return out
 }

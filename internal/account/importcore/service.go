@@ -73,7 +73,8 @@ func DefaultOptions() ImportOptions {
 func (s *Service) Import(ctx context.Context, candidates []ImportCandidate, opt ImportOptions) (*ImportResult, error) {
 	result := &ImportResult{Results: make([]ImportLineResult, 0, len(candidates))}
 	normalized := normalizeCandidates(candidates)
-	deduped := deduplicateByEmail(normalized)
+	resolved := s.resolveCandidates(ctx, normalized, opt)
+	deduped := deduplicateByEmail(resolved)
 	for _, item := range deduped {
 		line := s.persistOne(ctx, item, opt)
 		result.Results = append(result.Results, line)

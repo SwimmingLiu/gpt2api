@@ -92,10 +92,22 @@ type fakeIdentityResolver struct {
 	resolvedEmail string
 	err           error
 	calls         int
+	bySource      map[string]struct {
+		email string
+		err   error
+	}
 }
 
 func (r *fakeIdentityResolver) ResolveEmail(_ context.Context, candidate ImportCandidate) (string, error) {
 	r.calls++
+	if r.bySource != nil {
+		if outcome, ok := r.bySource[candidate.SourceRef]; ok {
+			if outcome.err != nil {
+				return "", outcome.err
+			}
+			return outcome.email, nil
+		}
+	}
 	if r.err != nil {
 		return "", r.err
 	}
@@ -515,5 +527,100 @@ func TestImportMixedBatchKeepsCountsSaneWhenOnePostprocessFails(t *testing.T) {
 	}
 	if hooks.refreshCalls != 1 || hooks.quotaProbeCalls != 1 {
 		t.Fatalf("expected hooks to run for remaining success, got %+v", hooks)
+	}
+}
+
+func TestImportFailsWhenResolverReturnsError(t *testing.T) {
+	store := &fakeStore{}
+	resolver := &fakeIdentityResolver{err: errors.New("resolver boom")}
+	core := NewService(ServiceDeps{
+		Store:            store,
+		IdentityResolver: resolver,
+		Now:              time.Now,
+		RefreshAheadSec:  func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Failed != 1 || result.Results[0].Reason != "resolver boom" {
+		t.Fatalf("expected resolver failure, got %+v", result)
+	}
+	if len(store.findCalls) != 0 || store.createCalls != 0 {
+		t.Fatalf("expected no persistence calls, got store=%+v", store)
+	}
+}
+
+func TestImportFailsWhenResolverReturnsEmptyEmail(t *testing.T) {
+	store := &fakeStore{}
+	resolver := &fakeIdentityResolver{resolvedEmail: "   "}
+	core := NewService(ServiceDeps{
+		Store:            store,
+		IdentityResolver: resolver,
+		Now:              time.Now,
+		RefreshAheadSec:  func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{{
+		SourceType:  "manual",
+		SourceRef:   "line:1",
+		AccessToken: "at",
+	}}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if result.Failed != 1 || result.Results[0].Reason != "email_required_identity_unresolved" {
+		t.Fatalf("expected unresolved email failure, got %+v", result)
+	}
+}
+
+func TestImportDeduplicatesAfterIdentityResolutionLastWins(t *testing.T) {
+	store := &fakeStore{}
+	resolver := &fakeIdentityResolver{
+		bySource: map[string]struct {
+			email string
+			err   error
+		}{
+			"line:1": {email: "resolved@example.com"},
+			"line:2": {email: "resolved@example.com"},
+		},
+	}
+	core := NewService(ServiceDeps{
+		Store:            store,
+		IdentityResolver: resolver,
+		Now:              time.Now,
+		RefreshAheadSec:  func() int { return 900 },
+	})
+
+	result, err := core.Import(context.Background(), []ImportCandidate{
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:1",
+			AccessToken: "first-at",
+			Notes:       "first",
+		},
+		{
+			SourceType:  "manual",
+			SourceRef:   "line:2",
+			AccessToken: "second-at",
+			Notes:       "second",
+		},
+	}, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("expected resolver called for each candidate before dedupe, got %+v", resolver)
+	}
+	if result.Total != 1 || result.Created != 1 {
+		t.Fatalf("expected one deduped resolved result, got %+v", result)
+	}
+	if store.lastCreated.Email != "resolved@example.com" || store.lastCreated.AccessToken != "second-at" || store.lastCreated.Notes != "second" {
+		t.Fatalf("expected resolved-email last-wins semantics, got %+v", store.lastCreated)
 	}
 }
