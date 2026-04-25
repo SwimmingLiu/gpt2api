@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
+
+	"github.com/432539/gpt2api/internal/account/importcore"
+	"github.com/432539/gpt2api/internal/account/importsource"
 )
 
 // ImportSource 代表一条待导入记录,来自任意一种 JSON 格式。
@@ -64,45 +66,37 @@ type ImportOptions struct {
 //  3. 顶层是数组,每个元素同 (1)/(2) 的单个对象
 //  4. 多个 JSON 文本用换行/空行分隔(JSONL)
 func ParseJSONBlob(raw string) ([]ImportSource, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("输入为空")
+	candidates, err := parseCandidatesFromJSON([]byte(raw))
+	if err != nil {
+		return nil, err
 	}
-	// 先尝试整体解析
-	if xs, err := parseSingleJSON(raw); err == nil && len(xs) > 0 {
-		return xs, nil
+	out := make([]ImportSource, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, importSourceFromCandidate(candidate))
 	}
-	// 再尝试 JSONL
-	var all []ImportSource
-	var firstErr error
-	dec := json.NewDecoder(strings.NewReader(raw))
-	for {
-		var one json.RawMessage
-		if err := dec.Decode(&one); err != nil {
-			if err == io.EOF {
-				break
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-			break
-		}
-		xs, err := parseSingleJSON(string(one))
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		all = append(all, xs...)
+	return out, nil
+}
+
+func parseCandidatesFromJSON(raw []byte) ([]importcore.ImportCandidate, error) {
+	return importsource.ParseAutoJSON(raw)
+}
+
+func importSourceFromCandidate(candidate importcore.ImportCandidate) ImportSource {
+	var expiredAt time.Time
+	if candidate.TokenExpiresAt != nil {
+		expiredAt = candidate.TokenExpiresAt.UTC()
 	}
-	if len(all) == 0 {
-		if firstErr == nil {
-			firstErr = errors.New("无法识别的 JSON 格式")
-		}
-		return nil, firstErr
+	return ImportSource{
+		AccessToken:      candidate.AccessToken,
+		Email:            candidate.Email,
+		RefreshToken:     candidate.RefreshToken,
+		SessionToken:     candidate.SessionToken,
+		ClientID:         candidate.ClientID,
+		ChatGPTAccountID: candidate.ChatGPTAccountID,
+		AccountType:      candidate.AccountType,
+		ExpiredAt:        expiredAt,
+		Name:             candidate.Notes,
 	}
-	return all, nil
 }
 
 func parseSingleJSON(s string) ([]ImportSource, error) {
