@@ -43,6 +43,8 @@
 
 - email 维度 upsert
 - 敏感字段加密入库
+- 过期 `access_token` 自动过滤
+- 可刷新账号保留但在刷新成功前不参与调度
 - 默认代理绑定
 - 导入到指定账号池
 - kick AT 刷新
@@ -141,7 +143,11 @@
 4. **手动新增也走统一导入链路**
    - 不再保留一套完全平行的账号创建规则
 
-5. **Phase 1 不新增数据库表**
+5. **凭证生命周期独立于账号风控状态**
+   - `status` 继续表达 `healthy / warned / throttled / suspicious / dead`
+   - token 是否过期、是否可刷新、是否即将过期,由 `token_expires_at + RT/ST` 单独判断
+
+6. **Phase 1 不新增数据库表**
    - 直接复用已有的 `oai_accounts` / `account_proxy_bindings` / `account_pool_members`
 
 ### 4.2 模块边界
@@ -204,6 +210,7 @@ type ImportOptions struct {
     DefaultProxyID uint64
     TargetPoolID   uint64
 
+    SkipExpiredATOnly bool
     ResolveIdentity bool
     KickRefresh     bool
     KickQuotaProbe  bool
@@ -213,6 +220,7 @@ type ImportOptions struct {
 默认值:
 
 - `UpdateExisting = true`
+- `SkipExpiredATOnly = true`
 - `ResolveIdentity = true`
 - `KickRefresh = true`
 - `KickQuotaProbe = true`
@@ -239,6 +247,7 @@ type ImportLineResult struct {
     Email      string
     Status     string
     Reason     string
+    Warnings   []string
     ID         uint64
 }
 ```
@@ -249,6 +258,35 @@ type ImportLineResult struct {
 - `updated`
 - `skipped`
 - `failed`
+
+### 5.4 凭证能力与生命周期分类
+
+统一导入内核在内存中为每条记录额外派生两类信息:
+
+1. **凭证能力**
+   - `at_only`
+   - `refreshable_rt`
+   - `refreshable_st`
+   - `refreshable_full`
+
+2. **生命周期状态**
+   - `active`
+   - `expiring_soon`
+   - `expired`
+   - `unknown`
+
+派生规则:
+
+- 只要有 `RefreshToken` 或 `SessionToken`,就视为“可刷新账号”
+- `TokenExpiresAt <= now` 视为 `expired`
+- `TokenExpiresAt` 在“当前时间 + refresh_ahead_sec”内视为 `expiring_soon`
+- 无法解析出过期时间则为 `unknown`
+
+`refresh_ahead_sec` 复用当前系统设置:
+
+- `account.refresh_ahead_sec`
+
+这样导入内核、刷新器、调度器对“即将过期”的判断口径一致。
 
 ## 6. 多来源适配器设计
 
@@ -383,6 +421,15 @@ type ImportLineResult struct {
 - 导入入库前必须拿到 `Email`
 - 拿不到 email 的记录标记为 `failed`
 
+在身份补全完成后,统一导入内核还要完成一次凭证生命周期判断:
+
+- 计算 `TokenExpiresAt`
+- 判断是否 `expired`
+- 判断是否 `expiring_soon`
+- 判断是否属于 `at_only`
+
+这一步不会修改 `status`,只用于决定是否自动过滤或保留等待刷新。
+
 ### 7.3 阶段 3: 冲突检查与同批去重
 
 规则:
@@ -392,6 +439,39 @@ type ImportLineResult struct {
 3. 如果来源提供的 `email` 与 JWT/远程补全出来的 `email` 不一致:
    - 当前记录直接 `failed`
    - 不自动覆盖
+
+### 7.3.1 过期账号自动过滤规则
+
+统一导入内核必须显式处理过期账号:
+
+1. **AT 已过期且没有 RT/ST**
+   - 当 `SkipExpiredATOnly = true` 时,该记录自动 `skipped`
+   - `Reason = "access_token 已过期且账号不可刷新,已自动过滤"`
+   - 不入库,不加池,不参与后处理
+
+2. **AT 已过期,但有 RT 或 ST**
+   - 允许入库 / 更新
+   - `Warnings` 增加 `access_token_expired_but_refreshable`
+   - 导入后立即 `KickRefresh`
+   - 在刷新成功前不会被调度器选中
+
+3. **AT 即将过期,但有 RT 或 ST**
+   - 允许入库 / 更新
+   - `Warnings` 增加 `access_token_expiring_soon`
+   - 导入后立即 `KickRefresh`
+
+4. **AT 即将过期,且没有 RT/ST**
+   - 允许入库 / 更新
+   - `Warnings` 增加 `access_token_expiring_soon_unrefreshable`
+   - 后台要显式展示为“短期可用但高风险”
+
+5. **过期时间未知**
+   - 不自动过滤
+   - 允许进入库
+   - `Warnings` 增加 `token_expiry_unknown`
+   - 后续由刷新器、额度探测器和实际调度结果继续校正
+
+这样可以自动清掉“必死 AT-only 账号”,同时保留“虽然当前 AT 过期,但 RT/ST 可恢复”的账号。
 
 ### 7.4 阶段 4: 数据库 upsert
 
@@ -423,6 +503,12 @@ type ImportLineResult struct {
 - 本次导入了新的有效 AT
 - 更新后恢复为 `healthy`
 
+额外规则:
+
+- 对“已过期但可刷新”的账号,允许入库但不强制恢复为 `healthy`
+- 真正恢复 `healthy` 的动作应由刷新成功后的现有刷新器逻辑完成
+- 这样不会把“理论可刷新但尚未刷新成功”的账号提前标成可调度
+
 ### 7.5 阶段 5: 后处理
 
 导入成功后统一支持:
@@ -443,6 +529,11 @@ type ImportLineResult struct {
    - `KickRefresh = true` → `refresher.Kick()`
    - `KickQuotaProbe = true` → `prober.Kick()`
 
+说明:
+
+- 对“AT 已过期但有 RT/ST”的记录,`KickRefresh` 是默认必开行为
+- 对“AT-only 且已过期”的记录,因为不会入库,自然不会进入后处理
+
 ### 7.6 阶段 6: 结果汇总
 
 每条记录都必须写入 `ImportLineResult`,包括:
@@ -450,6 +541,7 @@ type ImportLineResult struct {
 - 成功创建
 - 成功更新
 - 邮箱已存在被跳过
+- AT 已过期被自动过滤
 - token 缺字段失败
 - email 冲突失败
 - 远程补全失败
@@ -482,6 +574,11 @@ type ImportLineResult struct {
 - `target_pool_id`
 - `kick_refresh`
 - `kick_quota_probe`
+
+当手动新增只提供 AT 且该 AT 已过期时,也必须遵守统一规则:
+
+- 有 RT/ST → 允许保存并立即刷新
+- 无 RT/ST → 自动过滤并返回明确提示
 
 ### 8.3 Token 文本导入
 
@@ -610,6 +707,9 @@ type ImportLineResult struct {
 - CPA JSON 解析
 - sub2api JSON 解析
 - JWT claims 补全
+- 过期 AT-only 自动过滤
+- 过期但可刷新账号保留入库
+- 即将过期账号 warning
 - email 冲突处理
 - `UpdateExisting = true / false`
 - `TargetPoolID` 导入加池
@@ -631,7 +731,9 @@ type ImportLineResult struct {
 1. 导入后 `oai_accounts` 有数据
 2. 指定代理后 `account_proxy_bindings` 有数据
 3. 指定池后 `account_pool_members` 有数据
-4. 导入后能进入调度器候选集
+4. 过期 AT-only 账号不会进入库
+5. 过期但可刷新账号可以入库,但在刷新成功前不会进入调度器候选集
+6. 未过期账号导入后能进入调度器候选集
 
 ### 12.4 仓库级验证
 
@@ -651,12 +753,22 @@ type ImportLineResult struct {
 本轮 MVP 完成标准:
 
 1. `/Users/swimmingliu/Downloads/chatgpt账号.txt` 这类一行一个 AT 的文本可以导入
-2. 导入后可以指定加入账号池
-3. CPA 文件和 sub2api 本地 JSON 可以通过统一弹窗导入
-4. 手动新增不再绕开统一导入规则
-5. 导入后账号可被刷新 / 探测
-6. 至少一条导入账号能够通过当前图片 API 闭环跑通:
+2. 其中“AT 已过期且无 RT/ST”的记录会被自动过滤
+3. 导入后可以指定加入账号池
+4. CPA 文件和 sub2api 本地 JSON 可以通过统一弹窗导入
+5. 手动新增不再绕开统一导入规则
+6. 导入后账号可被刷新 / 探测
+7. 至少一条导入账号能够通过当前图片 API 闭环跑通:
    - `POST /v1/images/generations`
+
+后台展示要求:
+
+- 账号列表需要把“风控状态”和“凭证过期状态”分开显示
+- 至少要能区分:
+  - 已过期
+  - 即将过期
+  - 可刷新
+  - AT-only
 
 ## 14. 风险与缓解
 
@@ -675,14 +787,22 @@ type ImportLineResult struct {
 - 保持 `POST /api/admin/accounts` 路由与返回体不变
 - 增加 handler 兼容测试
 
-### 风险 3: 导入加池失败导致整批回滚逻辑复杂
+### 风险 3: 过期过滤规则与现有调度 / 刷新逻辑不一致
+
+缓解:
+
+- 导入内核对“即将过期”的判断复用 `account.refresh_ahead_sec`
+- 是否可调度继续以当前仓库 `ListDispatchable` 的 `token_expires_at > now` 为准
+- 不额外引入第二套调度判断口径
+
+### 风险 4: 导入加池失败导致整批回滚逻辑复杂
 
 缓解:
 
 - 把“账号入库成功”和“后处理失败”分开记录
 - 后处理失败写 `warning`,不否定主导入结果
 
-### 风险 4: Phase 1 做太满导致交付延迟
+### 风险 5: Phase 1 做太满导致交付延迟
 
 缓解:
 
