@@ -70,6 +70,9 @@ func TestImportTokensEndpointPreservesSummaryShape(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"created":1`) || !strings.Contains(w.Body.String(), `"total":1`) {
 		t.Fatalf("unexpected response body: %s", w.Body.String())
 	}
+	if h.importCore.(*fakeImportCore).gotOptions.TargetPoolID != 7 {
+		t.Fatalf("expected token import target_pool_id to forward, got %+v", h.importCore.(*fakeImportCore).gotOptions)
+	}
 	if h.importCore.(*fakeImportCore).gotOptions.ResolveIdentity || h.importCore.(*fakeImportCore).gotOptions.KickRefresh || h.importCore.(*fakeImportCore).gotOptions.KickQuotaProbe {
 		t.Fatalf("expected token import advanced options to honor request, got %+v", h.importCore.(*fakeImportCore).gotOptions)
 	}
