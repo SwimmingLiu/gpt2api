@@ -14,6 +14,7 @@ import (
 
 	"github.com/432539/gpt2api/internal/account"
 	"github.com/432539/gpt2api/internal/accountpool"
+	"github.com/432539/gpt2api/internal/accountsource"
 	"github.com/432539/gpt2api/internal/auth"
 	"github.com/432539/gpt2api/internal/config"
 	"github.com/432539/gpt2api/internal/db"
@@ -94,6 +95,7 @@ func main() {
 	poolDAO := accountpool.NewDAO(sqldb)
 	poolSvc := accountpool.NewService(poolDAO)
 	poolH := accountpool.NewHTTPHandler(poolSvc)
+	accountSourceDAO := accountsource.NewDAO(sqldb)
 
 	modelDAO := modelpkg.NewDAO(sqldb)
 	modelReg := modelpkg.NewRegistry(modelDAO)
@@ -185,6 +187,8 @@ func main() {
 		settingsSvc.AccountRefreshAheadSec,
 	)
 	accountH.SetImportCore(importCore)
+	accountSourceSvc := accountsource.NewService(accountSourceDAO, cipher, importCore)
+	accountSourceH := accountsource.NewHTTPHandler(accountSourceSvc)
 
 	// 把 resolver 注入到图片代理端点:下载图片时按 account_id 解出 AT/cookies/proxy。
 	imagesH.ImageAccResolver = acctProxyResolver
@@ -201,9 +205,10 @@ func main() {
 		AuthH: auth.NewHandler(authSvc),
 		UserH: user.NewHandler(userDAO),
 
-		ProxyH:       proxyH,
-		AccountH:     accountH,
-		AccountPoolH: poolH,
+		ProxyH:         proxyH,
+		AccountH:       accountH,
+		AccountPoolH:   poolH,
+		AccountSourceH: accountSourceH,
 
 		GatewayH: gwH,
 		ImagesH:  imagesH,

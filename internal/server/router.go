@@ -5,6 +5,7 @@ import (
 
 	"github.com/432539/gpt2api/internal/account"
 	"github.com/432539/gpt2api/internal/accountpool"
+	"github.com/432539/gpt2api/internal/accountsource"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
@@ -32,11 +33,12 @@ type Deps struct {
 	AuthH *auth.Handler
 	UserH *user.Handler
 
-	KeySvc       *apikey.Service
-	KeyH         *apikey.Handler
-	ProxyH       *proxy.Handler
-	AccountH     *account.Handler
-	AccountPoolH *accountpool.Handler
+	KeySvc         *apikey.Service
+	KeyH           *apikey.Handler
+	ProxyH         *proxy.Handler
+	AccountH       *account.Handler
+	AccountPoolH   *accountpool.Handler
+	AccountSourceH *accountsource.Handler
 
 	GatewayH *gateway.Handler
 	ImagesH  *gateway.ImagesHandler
@@ -165,6 +167,21 @@ func New(d *Deps) *gin.Engine {
 				admin.DELETE("/account-pool-routes/:modelId",
 					middleware.RequirePerm(rbac.PermAccountWrite),
 					d.AccountPoolH.DeleteRoute)
+			}
+
+			if d.AccountSourceH != nil {
+				sg := admin.Group("/account-import-sources", middleware.RequirePerm(rbac.PermAccountRead, rbac.PermAccountWrite))
+				{
+					sg.GET("", d.AccountSourceH.List)
+					sg.POST("", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Create)
+					sg.GET("/:id", d.AccountSourceH.Get)
+					sg.PATCH("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Update)
+					sg.DELETE("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Delete)
+					sg.GET("/:id/sub2api/groups", d.AccountSourceH.ListSub2APIGroups)
+					sg.GET("/:id/sub2api/accounts", d.AccountSourceH.ListSub2APIAccounts)
+					sg.GET("/:id/cpa/files", d.AccountSourceH.ListCPAFiles)
+					sg.POST("/:id/import", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.ImportSelected)
+				}
 			}
 
 			if d.AdminModelH != nil {
