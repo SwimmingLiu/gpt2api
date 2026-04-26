@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/billing"
 	"github.com/432539/gpt2api/internal/image"
@@ -45,6 +46,16 @@ type ImagesHandler struct {
 	*Handler
 	Runner *image.Runner
 	DAO    *image.DAO
+	RouteResolver interface {
+		ResolveDispatchRoute(
+			ctx context.Context,
+			modelID uint64,
+			defaultPoolID uint64,
+			defaultFallbackPoolID uint64,
+		) (accountpool.DispatchRoute, error)
+	}
+	DefaultPoolID         uint64
+	DefaultFallbackPoolID uint64
 	// ImageAccResolver 可选:代理下载上游图片时用于解出账号 AT/cookies/proxy。
 	// 未注入时 /p/img 路径会返回 503。
 	ImageAccResolver ImageAccountResolver
@@ -89,13 +100,6 @@ type ImageGenResponse struct {
 
 // ImageGenerations POST /v1/images/generations。
 func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
-	startAt := time.Now()
-	ak, ok := apikey.FromCtx(c)
-	if !ok {
-		openAIError(c, http.StatusUnauthorized, "missing_api_key", "缺少 API Key")
-		return
-	}
-
 	var req ImageGenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		openAIError(c, http.StatusBadRequest, "invalid_request_error", "请求参数错误:"+err.Error())
@@ -118,129 +122,67 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 		req.Size = "1024x1024"
 	}
 
-	refID := uuid.NewString()
-	rec := &usage.Log{
-		UserID:    ak.UserID,
-		KeyID:     ak.ID,
-		RequestID: refID,
-		Type:      usage.TypeImage,
-		IP:        c.ClientIP(),
-		UA:        c.Request.UserAgent(),
-	}
-	defer func() {
-		rec.DurationMs = int(time.Since(startAt).Milliseconds())
-		if rec.Status == "" {
-			rec.Status = usage.StatusFailed
-		}
-		if h.Usage != nil {
-			h.Usage.Write(rec)
-		}
-	}()
-	fail := func(code string) { rec.Status = usage.StatusFailed; rec.ErrorCode = code }
-
-	// 1) 模型白名单
-	if !ak.ModelAllowed(req.Model) {
-		fail("model_not_allowed")
-		openAIError(c, http.StatusForbidden, "model_not_allowed",
-			fmt.Sprintf("当前 API Key 无权调用模型 %q", req.Model))
+	// 只暴露单一图片模型。
+	if req.Model != "gpt-image-2" {
+		openAIError(c, http.StatusBadRequest, "model_not_found",
+			fmt.Sprintf("当前实例仅支持模型 %q", "gpt-image-2"))
 		return
 	}
 	m, err := h.Models.BySlug(c.Request.Context(), req.Model)
 	if err != nil || m == nil || !m.Enabled {
-		fail("model_not_found")
 		openAIError(c, http.StatusBadRequest, "model_not_found",
 			fmt.Sprintf("模型 %q 不存在或已下架", req.Model))
 		return
 	}
 	if m.Type != modelpkg.TypeImage {
-		fail("model_type_mismatch")
 		openAIError(c, http.StatusBadRequest, "model_type_mismatch",
 			fmt.Sprintf("模型 %q 不是图像模型,不能用于 /v1/images/generations", req.Model))
 		return
 	}
-	rec.ModelID = m.ID
 
-	// 2) 分组倍率 + RPM 限流(图像不走 TPM)
-	ratio := 1.0
-	rpmCap := ak.RPM
-	if h.Groups != nil {
-		if g, err := h.Groups.OfUser(c.Request.Context(), ak.UserID); err == nil && g != nil {
-			ratio = g.Ratio
-			if rpmCap == 0 {
-				rpmCap = g.RPMLimit
-			}
-		}
+	if h.RouteResolver == nil {
+		openAIError(c, http.StatusServiceUnavailable, "pool_route_not_configured", "图片池路由未初始化")
+		return
 	}
-	if h.Limiter != nil {
-		if ok, _, err := h.Limiter.AllowRPM(c.Request.Context(), ak.ID, rpmCap); err == nil && !ok {
-			fail("rate_limit_rpm")
-			openAIError(c, http.StatusTooManyRequests, "rate_limit_rpm",
-				"触发每分钟请求数限制 (RPM),请稍后再试")
-			return
-		}
+	route, err := h.RouteResolver.ResolveDispatchRoute(
+		c.Request.Context(),
+		m.ID,
+		h.DefaultPoolID,
+		h.DefaultFallbackPoolID,
+	)
+	if err != nil {
+		openAIError(c, http.StatusServiceUnavailable, "pool_route_not_configured", "未配置可用的图片账号池路由")
+		return
 	}
 
-	// 3) 预扣(图像按定价,est = actual)
-	cost := billing.ComputeImageCost(m, req.N, ratio)
-	if cost > 0 {
-		if err := h.Billing.PreDeduct(c.Request.Context(), ak.UserID, ak.ID, cost, refID, "image prepay"); err != nil {
-			if errors.Is(err, billing.ErrInsufficient) {
-				fail("insufficient_balance")
-				openAIError(c, http.StatusPaymentRequired, "insufficient_balance",
-					"积分不足,请前往「账单与充值」充值后再试")
-				return
-			}
-			fail("billing_error")
-			openAIError(c, http.StatusInternalServerError, "billing_error", "计费异常:"+err.Error())
-			return
-		}
-	}
-	refunded := false
-	refund := func(code string) {
-		fail(code)
-		if refunded || cost == 0 {
-			return
-		}
-		refunded = true
-		_ = h.Billing.Refund(context.Background(), ak.UserID, ak.ID, cost, refID, "image refund")
-	}
-
-	// 4) 落任务
 	taskID := image.GenerateTaskID()
 	task := &image.Task{
 		TaskID:          taskID,
-		UserID:          ak.UserID,
-		KeyID:           ak.ID,
+		UserID:          0,
+		KeyID:           0,
 		ModelID:         m.ID,
 		Prompt:          req.Prompt,
 		N:               req.N,
 		Size:            req.Size,
 		Status:          image.StatusDispatched,
-		EstimatedCredit: cost,
+		EstimatedCredit: 0,
 	}
 	if h.DAO != nil {
 		if err := h.DAO.Create(c.Request.Context(), task); err != nil {
-			refund("billing_error")
 			openAIError(c, http.StatusInternalServerError, "internal_error", "创建任务失败:"+err.Error())
 			return
 		}
 	}
 
-	// 4.5) 解析 reference_images(图生图 / 图像编辑入口都走到这里)
 	refs, err := decodeReferenceInputs(c.Request.Context(), req.ReferenceImages)
 	if err != nil {
-		refund("invalid_request_error")
 		openAIError(c, http.StatusBadRequest, "invalid_reference_image", "参考图解析失败:"+err.Error())
 		return
 	}
 
-	// 5) 执行(同步阻塞)
-	//
-	// 单请求硬上限 6 分钟:单个 attempt 5 分钟 + 可能的 preview_only 重试余量。
 	runCtx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Minute)
 	defer cancel()
 
-	// 带参考图时,灰度没什么意义,只留 1 次尝试避免重复上传参考图。
 	maxAttempts := 2
 	if len(refs) > 0 {
 		maxAttempts = 1
@@ -248,19 +190,18 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 
 	res := h.Runner.Run(runCtx, image.RunOptions{
 		TaskID:        taskID,
-		UserID:        ak.UserID,
-		KeyID:         ak.ID,
+		UserID:        0,
+		KeyID:         0,
 		ModelID:       m.ID,
+		DispatchRoute: route,
 		UpstreamModel: m.UpstreamModelSlug,
 		Prompt:        maybeAppendClaritySuffix(req.Prompt),
 		N:             req.N,
 		MaxAttempts:   maxAttempts,
 		References:    refs,
 	})
-	rec.AccountID = res.AccountID
 
 	if res.Status != image.StatusSuccess {
-		refund(ifEmpty(res.ErrorCode, "upstream_error"))
 		httpStatus := http.StatusBadGateway
 		if res.ErrorCode == image.ErrNoAccount {
 			httpStatus = http.StatusServiceUnavailable
@@ -273,24 +214,10 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 		return
 	}
 
-	// 6) 结算
-	if cost > 0 {
-		if err := h.Billing.Settle(context.Background(), ak.UserID, ak.ID, cost, cost, refID, "image settle"); err != nil {
-			logger.L().Error("billing settle image", zap.Error(err), zap.String("ref", refID))
-		}
-	}
-	_ = h.Keys.DAO().TouchUsage(context.Background(), ak.ID, c.ClientIP(), cost)
-
-	// 7) usage
-	rec.Status = usage.StatusSuccess
-	rec.CreditCost = cost
-
-	// 8) DAO 回写 credit_cost(Runner 已经 MarkSuccess,这里只补 credit_cost)
 	if h.DAO != nil {
-		_ = h.DAO.UpdateCost(c.Request.Context(), taskID, cost)
+		_ = h.DAO.UpdateCost(c.Request.Context(), taskID, 0)
 	}
 
-	// 9) 响应:URL 统一走自家代理,防止 chatgpt.com estuary/content 防盗链
 	out := ImageGenResponse{
 		Created:   time.Now().Unix(),
 		TaskID:    taskID,

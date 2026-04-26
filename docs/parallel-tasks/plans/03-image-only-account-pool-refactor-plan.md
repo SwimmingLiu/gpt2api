@@ -12,6 +12,27 @@
 
 ## 0. 执行原则
 
+### 0.0 共享契约摘要（后续实现统一引用）
+
+- **最终保留的对外接口**
+  - `POST /v1/images/generations`
+  - `GET /v1/models`
+  - `GET /p/img/:task_id/:idx`
+- **最终保留的后台模块**
+  - 管理员登录
+  - 账号
+  - 代理
+  - 账号池
+  - 池路由
+  - 最小设置
+- **最终网关鉴权**
+  - `/v1` 固定为实例级静态 Bearer Token
+  - 不再保留“用户拥有 API Key”的运行时模型
+- **必须停止初始化的模块**
+  - billing / recharge / usage / audit / backup
+  - user 自助菜单 / personal / playground
+  - chat 路由与其依赖链
+
 ### 0.1 任务分组原则
 
 - 先做**边界冻结**任务,再并行做代码改造

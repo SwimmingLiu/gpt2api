@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/billing"
 	modelpkg "github.com/432539/gpt2api/internal/model"
@@ -229,7 +230,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 
 	// 4) 调度账号
-	lease, err := h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat)
+	lease, err := h.Scheduler.Dispatch(c.Request.Context(), accountpool.DispatchRoute{LegacyGlobal: true})
 	if err != nil {
 		refund("no_account_available")
 		openAIError(c, http.StatusServiceUnavailable, "no_account_available", "账号池暂无可用账号,请稍后重试")
@@ -642,6 +643,9 @@ func (h *Handler) ListModels(c *gin.Context) {
 	}
 	data := make([]gin.H, 0, len(list))
 	for _, m := range list {
+		if m.Slug != "gpt-image-2" {
+			continue
+		}
 		data = append(data, gin.H{
 			"id":       m.Slug,
 			"object":   "model",
