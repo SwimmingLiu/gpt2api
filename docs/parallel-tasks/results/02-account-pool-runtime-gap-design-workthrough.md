@@ -34,8 +34,10 @@
 
 ## 4. 最终合并 PR
 
-- PR: 待创建
-- 合并状态: 待合并
+- PR: `#2`
+- URL: `https://github.com/SwimmingLiu/gpt2api/pull/2`
+- 目标分支: `main`
+- 说明: 本 PR 即本任务的最终合并 PR
 
 ## 5. 交付文件
 
