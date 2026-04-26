@@ -33,10 +33,6 @@ export function login(req: LoginReq): Promise<LoginResp> {
   return http.post('/api/auth/login', req)
 }
 
-export function register(req: { email: string; password: string; nickname?: string }): Promise<UserInfo> {
-  return http.post('/api/auth/register', req)
-}
-
 export interface MeResp {
   user: UserInfo
   role: string

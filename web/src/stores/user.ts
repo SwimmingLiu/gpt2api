@@ -32,10 +32,6 @@ export const useUserStore = defineStore(
       await fetchMe()
     }
 
-    async function register(email: string, password: string, nickname?: string) {
-      await authApi.register({ email, password, nickname })
-    }
-
     async function fetchMe() {
       const data = await authApi.getMe()
       user.value = data.user
@@ -83,7 +79,6 @@ export const useUserStore = defineStore(
       isAdmin,
       setTokens,
       login,
-      register,
       fetchMe,
       fetchMenu,
       hasPerm,
