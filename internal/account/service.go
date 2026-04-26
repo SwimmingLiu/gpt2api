@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,7 +29,7 @@ type CreateInput struct {
 	AuthToken        string    `json:"auth_token"`
 	RefreshToken     string    `json:"refresh_token"`
 	SessionToken     string    `json:"session_token"`
-	TokenExpiresAt   time.Time `json:"token_expires_at"`
+	TokenExpiresAt   string    `json:"token_expires_at"`
 	OAISessionID     string    `json:"oai_session_id"`
 	OAIDeviceID      string    `json:"oai_device_id"`
 	ClientID         string    `json:"client_id"`
@@ -46,7 +48,7 @@ type UpdateInput struct {
 	AuthToken        string    `json:"auth_token"`
 	RefreshToken     string    `json:"refresh_token"`
 	SessionToken     string    `json:"session_token"`
-	TokenExpiresAt   time.Time `json:"token_expires_at"`
+	TokenExpiresAt   string    `json:"token_expires_at"`
 	OAISessionID     string    `json:"oai_session_id"`
 	OAIDeviceID      string    `json:"oai_device_id"`
 	ClientID         string    `json:"client_id"`
@@ -59,9 +61,25 @@ type UpdateInput struct {
 	Cookies          string    `json:"cookies"`
 }
 
+func parseOptionalRFC3339(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("token_expires_at 格式错误,需要 RFC3339: %w", err)
+	}
+	return ts, nil
+}
+
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Account, error) {
 	if in.Email == "" || in.AuthToken == "" {
 		return nil, errors.New("email 和 auth_token 不能为空")
+	}
+	expAt, err := parseOptionalRFC3339(in.TokenExpiresAt)
+	if err != nil {
+		return nil, err
 	}
 	atEnc, err := s.cipher.EncryptString(in.AuthToken)
 	if err != nil {
@@ -104,8 +122,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Account, error) 
 		PlanType: in.PlanType, DailyImageQuota: in.DailyImageQuota,
 		Status: StatusHealthy, Notes: in.Notes,
 	}
-	if !in.TokenExpiresAt.IsZero() {
-		a.TokenExpiresAt = sql.NullTime{Time: in.TokenExpiresAt, Valid: true}
+	if !expAt.IsZero() {
+		a.TokenExpiresAt = sql.NullTime{Time: expAt, Valid: true}
 	} else {
 		// 自动从 JWT 解析 exp
 		if exp := parseJWTExp(in.AuthToken); !exp.IsZero() {
@@ -139,6 +157,10 @@ func (s *Service) Update(ctx context.Context, id uint64, in UpdateInput) (*Accou
 	if err != nil {
 		return nil, err
 	}
+	expAt, err := parseOptionalRFC3339(in.TokenExpiresAt)
+	if err != nil {
+		return nil, err
+	}
 	if in.Email != "" {
 		a.Email = in.Email
 	}
@@ -163,8 +185,8 @@ func (s *Service) Update(ctx context.Context, id uint64, in UpdateInput) (*Accou
 		}
 		a.SessionTokenEnc = sql.NullString{String: enc, Valid: true}
 	}
-	if !in.TokenExpiresAt.IsZero() {
-		a.TokenExpiresAt = sql.NullTime{Time: in.TokenExpiresAt, Valid: true}
+	if !expAt.IsZero() {
+		a.TokenExpiresAt = sql.NullTime{Time: expAt, Valid: true}
 	} else if in.AuthToken != "" {
 		if exp := parseJWTExp(in.AuthToken); !exp.IsZero() {
 			a.TokenExpiresAt = sql.NullTime{Time: exp, Valid: true}

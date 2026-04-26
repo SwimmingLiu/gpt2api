@@ -6,7 +6,7 @@ const router = useRouter()
   <div class="err-page">
     <el-result icon="error" title="403" sub-title="你当前的角色没有访问此页面的权限。">
       <template #extra>
-        <el-button @click="router.replace('/personal/dashboard')">回到个人中心</el-button>
+        <el-button @click="router.replace('/admin/accounts')">回到管理后台</el-button>
       </template>
     </el-result>
   </div>

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/scheduler"
 	"github.com/432539/gpt2api/internal/upstream/chatgpt"
 	"github.com/432539/gpt2api/pkg/logger"
@@ -45,6 +46,7 @@ type RunOptions struct {
 	UserID            uint64
 	KeyID             uint64
 	ModelID           uint64
+	DispatchRoute     accountpool.DispatchRoute
 	UpstreamModel     string // 默认 "auto"(由上游根据 system_hints 挑选图像模型)
 	Prompt            string
 	N                 int                // 目前上游单次返回固定,N 仅用于计费
@@ -149,7 +151,7 @@ func (r *Runner) Run(ctx context.Context, opt RunOptions) *RunResult {
 // result 会被就地更新(ConversationID / FileIDs / SignedURLs / AccountID 等)。
 func (r *Runner) runOnce(ctx context.Context, opt RunOptions, result *RunResult) (bool, string, error) {
 	// 1) 调度账号
-	lease, err := r.sched.Dispatch(ctx, "image")
+	lease, err := r.sched.Dispatch(ctx, opt.DispatchRoute)
 	if err != nil {
 		if errors.Is(err, scheduler.ErrNoAvailable) {
 			return false, ErrNoAccount, err

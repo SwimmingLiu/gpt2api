@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	App       AppConfig       `mapstructure:"app"`
+	Gateway   GatewayConfig   `mapstructure:"gateway"`
 	Log       LogConfig       `mapstructure:"log"`
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	Redis     RedisConfig     `mapstructure:"redis"`
@@ -28,6 +29,12 @@ type AppConfig struct {
 	Env     string `mapstructure:"env"`
 	Listen  string `mapstructure:"listen"`
 	BaseURL string `mapstructure:"base_url"`
+}
+
+type GatewayConfig struct {
+	StaticBearerToken     string `mapstructure:"static_bearer_token"`
+	DefaultImagePoolID    uint64 `mapstructure:"default_image_pool_id"`
+	DefaultFallbackPoolID uint64 `mapstructure:"default_fallback_pool_id"`
 }
 
 type LogConfig struct {

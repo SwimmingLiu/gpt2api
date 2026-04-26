@@ -136,11 +136,8 @@ watch(() => store.isLoggedIn, (v) => { if (v) loadMenu() })
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="/personal/dashboard">
-                  <el-icon><User /></el-icon> 个人中心
-                </el-dropdown-item>
-                <el-dropdown-item command="/personal/billing">
-                  <el-icon><Wallet /></el-icon> 账单
+                <el-dropdown-item command="/admin/accounts">
+                  <el-icon><Connection /></el-icon> GPT账号
                 </el-dropdown-item>
                 <el-dropdown-item divided command="logout">
                   <el-icon><SwitchButton /></el-icon> 退出登录

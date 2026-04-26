@@ -4,6 +4,11 @@ app:
   listen: ":8080"
   base_url: "http://localhost:8080"
 
+gateway:
+  static_bearer_token: "CHANGE_ME_IMAGE_GATEWAY_TOKEN"
+  default_image_pool_id: 0
+  default_fallback_pool_id: 0
+
 log:
   level: info           # debug | info | warn | error
   format: console       # console | json

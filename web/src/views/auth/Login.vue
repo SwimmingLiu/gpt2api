@@ -13,12 +13,10 @@ const site = useSiteStore()
 
 const siteName = computed(() => site.get('site.name', 'GPT2API'))
 const siteDesc = computed(() =>
-  site.get('site.description', '基于 chatgpt.com 的 OpenAI 兼容网关 · 多账号池 · IMG2 灰度 · 批量出图'),
+  site.get('site.description', '面向 gpt-image-2 的图片账号池服务 · 多账号池 · 代理池 · IMG2 灰度'),
 )
 const siteLogo = computed(() => site.get('site.logo_url', ''))
 const siteFooter = computed(() => site.get('site.footer', ''))
-const allowRegister = computed(() => site.allowRegister())
-
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
@@ -46,7 +44,7 @@ async function onSubmit() {
   try {
     await store.login(form.email, form.password)
     ElMessage.success('登录成功')
-    const redirect = (route.query.redirect as string) || '/personal/dashboard'
+    const redirect = (route.query.redirect as string) || '/admin/accounts'
     router.replace(redirect)
   } catch {
     // 错误已由 axios 拦截器 toast
@@ -66,14 +64,14 @@ async function onSubmit() {
       </div>
       <p class="tagline">{{ siteDesc }}</p>
       <ul class="features">
-        <li><el-icon><Lightning /></el-icon> 多账号池 / 多代理池 · IMG2 灰度命中 · 批量出图 · 高并发调度</li>
-        <li><el-icon><Lock /></el-icon> RBAC 权限 · 全链路审计 · 数据库一键备份 / 恢复</li>
-        <li><el-icon><Medal /></el-icon> 积分钱包 · 预扣结算 · 易支付接入 · 用量透明</li>
+        <li><el-icon><Lightning /></el-icon> 多账号池 / 多代理池 · IMG2 灰度命中 · 池内调度 / fallback</li>
+        <li><el-icon><Lock /></el-icon> 管理员 JWT 登录 · 最小后台边界 · 图片代理下载</li>
+        <li><el-icon><Medal /></el-icon> 账号导入 / 刷新 / 额度探测 · 面向图片主链路收口</li>
       </ul>
     </div>
     <el-card class="form-card" shadow="hover">
       <div class="form-title">欢迎回来</div>
-      <div class="form-sub">请使用管理员分配的账号登录</div>
+      <div class="form-sub">请使用管理员账号登录纯后台控制台</div>
       <el-form
         ref="formRef"
         :model="form"
@@ -95,12 +93,7 @@ async function onSubmit() {
         </el-form-item>
         <el-button type="primary" :loading="loading" class="submit" @click="onSubmit">登录</el-button>
         <div class="foot">
-          <template v-if="allowRegister">
-            还没有账号?<router-link to="/register">立即注册</router-link>
-          </template>
-          <template v-else>
-            <span class="muted">管理员已关闭自助注册,请联系管理员创建账号</span>
-          </template>
+          <span class="muted">不再开放自助注册,请联系管理员创建账号</span>
         </div>
       </el-form>
     </el-card>

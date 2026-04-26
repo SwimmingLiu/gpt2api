@@ -1,6 +1,6 @@
 # gpt2api
 
-> 基于逆向 **chatgpt.com** 的 OpenAI 兼容 SaaS 网关 —— 多账号池 / 代理池 / **IMG2 灰度命中** / **批量出图** / **高并发调度** / 积分计费 / 管理后台一体化。
+> 面向 `gpt-image-2` 的图片账号池服务 —— 管理后台 / 代理池 / 账号池调度 / 图片代理下载。
 
 <p align="center">
   <a href="https://github.com/432539/gpt2api/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/432539/gpt2api?style=flat-square"></a>
@@ -42,15 +42,23 @@
 
 ## 一、项目定位
 
-`gpt2api` 是一个**自建的 ChatGPT → OpenAI 兼容网关**,把 `chatgpt.com` Plus / Team / Codex 账号的能力,以 **完全兼容 OpenAI API** 的形式(`/v1/chat/completions` / `/v1/images/generations`)开放给下游调用方,同时配套一整套 SaaS 运营后台。
+> **当前分支冻结后的共享契约**
+>
+> - 对外仅保留 `POST /v1/images/generations`、`GET /v1/models`、`GET /p/img/:task_id/:idx`
+> - `/v1` 鉴权改为**实例级静态 Bearer Token**
+> - 管理后台仅保留：管理员登录、账号、代理、账号池、池路由、最小设置
+> - 图片请求主链路固定为：`gpt-image-2 -> DispatchRoute -> 主池/兜底池 -> 池成员调度 -> image runner`
+> - 不再初始化 SaaS 计费、充值、用户自助 API Key、Playground、审计、备份等运行时模块
+
+`gpt2api` 当前定位为一个**图片账号池服务**,把 `chatgpt.com` 账号的 `gpt-image-2` 能力通过最小 OpenAI 兼容接口暴露给下游调用方,并配套一个只面向管理员的后台。
 
 适合的场景:
 
-- 你手头有一批 ChatGPT Plus / Team / Codex 账号,想对外提供稳定的 **GPT Image / DALL·E 3 / IMG2 高清大图**服务;
-- 想给公司 / 团队内部开通 OpenAI 风格的代理网关,把所有调用统计、计费、审计集中管理;
-- 想低成本搭一个带积分 / 套餐 / 易支付的 AI API 中台,面向 C 端或 B 端开发者售卖。
+- 你手头有一批 ChatGPT Plus / Team / Codex 账号,需要一个稳定的 **`gpt-image-2` 账号池网关**;
+- 你希望把账号、代理、池路由和调度统一收敛在一个管理后台里;
+- 你更关心图片主链路稳定性,而不是多租户 SaaS 计费 / 用户运营。
 
-> 本项目当前版本**聚焦图片模型**(详见 [8.1 IMG2 灰度命中测试](#81-img2-灰度命中测试) 与 [8.2 批量出图](#82-批量出图--多张聚合))。文字通路(`/v1/chat/completions`)代码层完整保留,但因 `chatgpt.com` 新 sentinel 协议存在短期不稳定因素,UI 入口已在当前版本关闭,恢复只需改一行 feature flag,详见 [十一、二次开发](#十一二次开发--定制)。
+> 当前交付基线已经移除文本聊天、用户自助 API Key、充值计费、Playground、审计和备份等 SaaS 能力,只保留图片账号池 MVP。
 
 ---
 
