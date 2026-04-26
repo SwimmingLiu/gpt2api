@@ -13,13 +13,13 @@ const mockPools = [
   },
   {
     id: 2,
-    code: 'chat-main',
-    name: '对话主池',
-    pool_type: 'chat',
-    description: '主力聊天账号池',
+    code: 'image-fallback',
+    name: '图片回退池',
+    pool_type: 'image',
+    description: 'fallback 图片账号池',
     enabled: true,
     dispatch_strategy: 'least_recently_used',
-    sticky_ttl_sec: 120,
+    sticky_ttl_sec: 300,
   },
 ]
 
@@ -29,19 +29,17 @@ const mockMembers: Record<number, any[]> = {
     { id: 12, pool_id: 1, account_id: 102, enabled: true, weight: 100, priority: 120, max_parallel: 1, note: '备用图像号' },
   ],
   2: [
-    { id: 21, pool_id: 2, account_id: 201, enabled: true, weight: 100, priority: 100, max_parallel: 2, note: '对话号' },
+    { id: 21, pool_id: 2, account_id: 102, enabled: true, weight: 100, priority: 100, max_parallel: 1, note: '回退池成员' },
   ],
 }
 
 const mockAccounts = [
   { id: 101, email: 'image1@example.com', account_type: 'chatgpt', status: 'healthy', notes: '图片号', has_rt: true, has_st: false, client_id: '', chatgpt_account_id: '', oai_session_id: '', oai_device_id: '', plan_type: 'plus', daily_image_quota: 100, today_used_count: 3, last_refresh_source: 'rt', refresh_error: '', image_quota_remaining: 47, image_quota_total: 50, created_at: '', updated_at: '' },
   { id: 102, email: 'image2@example.com', account_type: 'chatgpt', status: 'warned', notes: '备用图像号', has_rt: true, has_st: true, client_id: '', chatgpt_account_id: '', oai_session_id: '', oai_device_id: '', plan_type: 'plus', daily_image_quota: 100, today_used_count: 9, last_refresh_source: 'st', refresh_error: '', image_quota_remaining: 20, image_quota_total: 50, created_at: '', updated_at: '' },
-  { id: 201, email: 'chat1@example.com', account_type: 'codex', status: 'healthy', notes: '对话号', has_rt: true, has_st: false, client_id: '', chatgpt_account_id: '', oai_session_id: '', oai_device_id: '', plan_type: 'plus', daily_image_quota: 100, today_used_count: 0, last_refresh_source: 'rt', refresh_error: '', image_quota_remaining: -1, image_quota_total: -1, created_at: '', updated_at: '' },
 ]
 
 const mockModels = [
   { id: 1, slug: 'gpt-image-2', type: 'image', upstream_model_slug: 'auto', input_price_per_1m: 0, output_price_per_1m: 0, cache_read_price_per_1m: 0, image_price_per_call: 500000, description: '图片模型', enabled: true, created_at: '', updated_at: '' },
-  { id: 2, slug: 'gpt-5', type: 'chat', upstream_model_slug: 'gpt-5-3', input_price_per_1m: 25000, output_price_per_1m: 75000, cache_read_price_per_1m: 0, image_price_per_call: 0, description: '聊天模型', enabled: true, created_at: '', updated_at: '' },
 ]
 
 const mockProxies = [
@@ -51,7 +49,6 @@ const mockProxies = [
 
 const mockRoutes = [
   { id: 1, model_id: 1, pool_id: 1, fallback_pool_id: 2, enabled: true },
-  { id: 2, model_id: 2, pool_id: 2, fallback_pool_id: 0, enabled: true },
 ]
 
 const mockUser = {
@@ -66,51 +63,23 @@ const mockUser = {
 }
 
 const mockPermissions = [
-  'self:profile', 'self:key', 'self:usage', 'self:recharge', 'self:image',
-  'user:read', 'user:write', 'user:credit',
-  'key:read_all', 'key:write_all',
   'account:read', 'account:write',
   'proxy:read', 'proxy:write',
   'model:read', 'model:write',
-  'group:write', 'recharge:manage',
-  'usage:read_all', 'stats:read_all', 'audit:read',
-  'system:setting', 'system:backup',
+  'system:setting',
 ]
 
 const mockMenu = [
-  {
-    key: 'personal',
-    title: '个人中心',
-    icon: 'User',
-    path: '/personal',
-    children: [
-      { key: 'personal.dashboard', title: '总览', icon: 'House', path: '/personal/dashboard' },
-      { key: 'personal.keys', title: 'API Keys', icon: 'Key', path: '/personal/keys' },
-      { key: 'personal.usage', title: '使用记录', icon: 'Histogram', path: '/personal/usage' },
-      { key: 'personal.billing', title: '账单与充值', icon: 'Wallet', path: '/personal/billing' },
-      { key: 'personal.play', title: '在线体验', icon: 'MagicStick', path: '/personal/play' },
-      { key: 'personal.docs', title: '接口文档', icon: 'Document', path: '/personal/docs' },
-    ],
-  },
   {
     key: 'admin',
     title: '后台管理',
     icon: 'Setting',
     path: '/admin',
     children: [
-      { key: 'admin.users', title: '用户管理', icon: 'UserFilled', path: '/admin/users' },
-      { key: 'admin.credits', title: '积分管理', icon: 'Coin', path: '/admin/credits' },
-      { key: 'admin.recharges', title: '充值订单', icon: 'CreditCard', path: '/admin/recharges' },
       { key: 'admin.accounts', title: 'GPT账号', icon: 'Connection', path: '/admin/accounts' },
-      { key: 'admin.account-pools', title: '账号池管理', icon: 'CollectionTag', path: '/admin/account-pools' },
+      { key: 'admin.account-pools', title: '账号池', icon: 'CollectionTag', path: '/admin/account-pools' },
+      { key: 'admin.account-pool-routes', title: '池路由', icon: 'Share', path: '/admin/account-pool-routes' },
       { key: 'admin.proxies', title: '代理管理', icon: 'Guide', path: '/admin/proxies' },
-      { key: 'admin.models', title: '模型配置', icon: 'Box', path: '/admin/models' },
-      { key: 'admin.model-pool-routes', title: '模型池路由', icon: 'Share', path: '/admin/model-pool-routes' },
-      { key: 'admin.groups', title: '用户分组', icon: 'OfficeBuilding', path: '/admin/groups' },
-      { key: 'admin.usage', title: '用量统计', icon: 'DataAnalysis', path: '/admin/usage' },
-      { key: 'admin.keys', title: '全局 Keys', icon: 'Key', path: '/admin/keys' },
-      { key: 'admin.audit', title: '审计日志', icon: 'Document', path: '/admin/audit' },
-      { key: 'admin.backup', title: '数据备份', icon: 'FolderOpened', path: '/admin/backup' },
       { key: 'admin.settings', title: '系统设置', icon: 'Tools', path: '/admin/settings' },
     ],
   },
@@ -149,7 +118,7 @@ export function maybeMockResponse(config: InternalAxiosRequestConfig): AxiosResp
       'site.name': 'GPT2API 控制台',
       'site.logo_url': '',
       'site.footer': 'Mock preview mode',
-      'auth.allow_register': 'true',
+      'auth.allow_register': 'false',
     }, config)
   }
   if (method === 'post' && url === '/api/auth/login') {
