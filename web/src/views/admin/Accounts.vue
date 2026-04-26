@@ -454,14 +454,12 @@ async function onProbeAll() {
 const importDlg = ref(false)
 const importing = ref(false)
 const importResultRows = ref<ImportDialogResultRow[]>([])
+const BATCH_FILES = 200
+const BATCH_BYTES = 8 * 1024 * 1024
 
 function openImport() {
   importResultRows.value = []
   importDlg.value = true
-}
-
-function clearImportResults() {
-  importResultRows.value = []
 }
 
 function showImportSummary(summary: accountApi.ImportSummary, title = '账号导入完成') {
@@ -477,22 +475,124 @@ function toResultRows(summary: accountApi.ImportSummary): ImportDialogResultRow[
   return summary.results.map((row) => ({ ...row }))
 }
 
+function mergeImportSummaries(
+  left: accountApi.ImportSummary,
+  right: accountApi.ImportSummary,
+): accountApi.ImportSummary {
+  return {
+    total: left.total + right.total,
+    created: left.created + right.created,
+    updated: left.updated + right.updated,
+    skipped: left.skipped + right.skipped,
+    failed: left.failed + right.failed,
+    results: [...left.results, ...right.results],
+  }
+}
+
+function createEmptySummary(): accountApi.ImportSummary {
+  return {
+    total: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+  }
+}
+
+function normalizeBatchFiles(files: File[]) {
+  const batches: File[][] = []
+  let current: File[] = []
+  let currentBytes = 0
+  for (const file of files) {
+    if (
+      current.length >= BATCH_FILES ||
+      (currentBytes + file.size > BATCH_BYTES && current.length > 0)
+    ) {
+      batches.push(current)
+      current = []
+      currentBytes = 0
+    }
+    current.push(file)
+    currentBytes += file.size
+  }
+  if (current.length > 0) batches.push(current)
+  return batches
+}
+
+async function confirmTokenImportWithoutProxy(payload: DialogSubmitPayload) {
+  if (payload.kind !== 'access_token') return true
+  if (payload.payload.mode !== 'rt' && payload.payload.mode !== 'st') return true
+  if (payload.advanced.default_proxy_id) return true
+  const modeLabel = payload.payload.mode.toUpperCase()
+  try {
+    await ElMessageBox.confirm(
+      `${modeLabel} 模式需要访问 chatgpt.com / auth.openai.com 换取 AT。当前未选择默认代理，直连很可能失败。确认继续吗？`,
+      '未选择默认代理',
+      {
+        confirmButtonText: '继续提交',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function submitJSONLikeImport(
   model: FileImportModel,
   sourceKind: 'cpa_file' | 'sub2api_json',
-  payload: DialogSubmitPayload,
+  advanced: DialogSubmitPayload['advanced'],
 ) {
   const options = {
     source_kind: sourceKind,
-    update_existing: payload.advanced.update_existing,
-    default_proxy_id: payload.advanced.default_proxy_id,
-    target_pool_id: payload.advanced.target_pool_id,
-    resolve_identity: payload.advanced.resolve_identity,
-    kick_refresh: payload.advanced.kick_refresh,
-    kick_quota_probe: payload.advanced.kick_quota_probe,
+    update_existing: advanced.update_existing,
+    default_proxy_id: advanced.default_proxy_id,
+    target_pool_id: advanced.target_pool_id,
+    resolve_identity: advanced.resolve_identity,
+    kick_refresh: advanced.kick_refresh,
+    kick_quota_probe: advanced.kick_quota_probe,
   }
   if (model.files.length > 0) {
-    return accountApi.importAccountsFiles(model.files, options)
+    const batches = normalizeBatchFiles(model.files)
+    let merged = createEmptySummary()
+    let resultOffset = 0
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i]
+      try {
+        const summary = await accountApi.importAccountsFiles(batch, options)
+        const normalized: accountApi.ImportSummary = {
+          ...summary,
+          results: summary.results.map((row, index) => ({
+            ...row,
+            index: resultOffset + index + 1,
+          })),
+        }
+        merged = mergeImportSummaries(merged, normalized)
+        resultOffset = merged.results.length
+      } catch (e: any) {
+        const failedSummary: accountApi.ImportSummary = {
+          total: batch.length,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          failed: batch.length,
+          results: batch.map((file, index) => ({
+            index: resultOffset + index + 1,
+            source_type: sourceKind,
+            source_ref: file.name,
+            email: '',
+            status: 'failed',
+            reason: e?.message || `第 ${i + 1} 批上传失败`,
+          })),
+        }
+        merged = mergeImportSummaries(merged, failedSummary)
+        resultOffset = merged.results.length
+      }
+    }
+    return merged
   }
   return accountApi.importAccountsJSON({
     text: model.text,
@@ -505,9 +605,11 @@ function assertNeverPayload(value: never): never {
 }
 
 async function handleImportSubmit(payload: DialogSubmitPayload) {
+  if (!(await confirmTokenImportWithoutProxy(payload))) return
+
   importing.value = true
-  clearImportResults()
   try {
+    let nextRows: ImportDialogResultRow[] = []
     switch (payload.kind) {
       case 'access_token': {
         const result = await accountApi.importAccountsTokens({
@@ -521,7 +623,7 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
           kick_refresh: payload.advanced.kick_refresh,
           kick_quota_probe: payload.advanced.kick_quota_probe,
         })
-        importResultRows.value = toResultRows(result)
+        nextRows = toResultRows(result)
         showImportSummary(result, `${payload.payload.mode.toUpperCase()} 导入完成`)
         break
       }
@@ -530,9 +632,9 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
         const result = await submitJSONLikeImport(
           payload.payload,
           payload.kind === 'cpa' ? 'cpa_file' : 'sub2api_json',
-          payload,
+          payload.advanced,
         )
-        importResultRows.value = toResultRows(result)
+        nextRows = toResultRows(result)
         showImportSummary(result, payload.kind === 'cpa' ? 'CPA 导入完成' : 'sub2api 导入完成')
         break
       }
@@ -549,13 +651,12 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
           notes: payload.payload.notes,
           proxy_id: payload.advanced.default_proxy_id,
           target_pool_id: payload.advanced.target_pool_id,
-          update_existing: payload.advanced.update_existing,
           resolve_identity: payload.advanced.resolve_identity,
           kick_refresh: payload.advanced.kick_refresh,
           kick_quota_probe: payload.advanced.kick_quota_probe,
         }
         const account = await accountApi.createAccount(body)
-        importResultRows.value = [{
+        nextRows = [{
           index: 1,
           source_type: 'manual',
           source_ref: payload.payload.email.trim(),
@@ -573,6 +674,7 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
       default:
         assertNeverPayload(payload)
     }
+    importResultRows.value = nextRows
     await fetchList()
   } catch (e: any) {
     ElMessage.error(e?.message || '导入失败')
