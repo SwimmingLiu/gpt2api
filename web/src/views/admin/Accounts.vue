@@ -4,15 +4,17 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import * as accountApi from '@/api/accounts'
 import * as proxyApi from '@/api/proxies'
+import * as poolApi from '@/api/accountPools'
 import { formatDateShort } from '@/utils/format'
 
 // ========== 列表 & 筛选 ==========
 const loading = ref(false)
-const filter = reactive<{ status?: string; keyword?: string }>({ status: '', keyword: '' })
+const filter = reactive<{ status?: string; keyword?: string; pool_id?: number }>({ status: '', keyword: '', pool_id: undefined })
 const rows = ref<accountApi.Account[]>([])
 const total = ref(0)
 const pager = reactive({ page: 1, page_size: 10 })
 const proxies = ref<proxyApi.Proxy[]>([])
+const pools = ref<poolApi.AccountPool[]>([])
 
 async function fetchList() {
   loading.value = true
@@ -22,6 +24,7 @@ async function fetchList() {
       page_size: pager.page_size,
       status: filter.status || undefined,
       keyword: filter.keyword || undefined,
+      pool_id: filter.pool_id || undefined,
     })
     rows.value = data.list || []
     total.value = data.total || 0
@@ -41,6 +44,15 @@ async function fetchProxies() {
   }
 }
 
+async function fetchPools() {
+  try {
+    const d = await poolApi.listAccountPools()
+    pools.value = d.items || []
+  } catch {
+    /* noop */
+  }
+}
+
 function onSearch() {
   pager.page = 1
   fetchList()
@@ -48,6 +60,7 @@ function onSearch() {
 function onReset() {
   filter.status = ''
   filter.keyword = ''
+  filter.pool_id = undefined
   pager.page = 1
   fetchList()
 }
@@ -432,6 +445,7 @@ const importForm = reactive({
   update_existing: true,
   default_client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
   default_proxy_id: 0,
+  default_pool_id: 0,
 })
 const importing = ref(false)
 const importProgress = reactive({
@@ -454,6 +468,7 @@ function openImport() {
   importForm.update_existing = true
   importForm.default_client_id = 'app_EMoamEEZ73f0CkXaXp7hrann'
   importForm.default_proxy_id = 0
+  importForm.default_pool_id = 0
   importResult.value = null
   importLastErrors.value = []
   importProgress.running = false
@@ -553,6 +568,7 @@ async function doImport() {
         client_id: importForm.default_client_id.trim() || undefined,
         update_existing: importForm.update_existing,
         default_proxy_id: importForm.default_proxy_id || undefined,
+        default_pool_id: importForm.default_pool_id || undefined,
       })
       mergeSummary(r)
       importResult.value = cloneAgg()
@@ -585,6 +601,7 @@ async function doImport() {
         update_existing: importForm.update_existing,
         default_client_id: importForm.default_client_id || undefined,
         default_proxy_id: importForm.default_proxy_id || undefined,
+        default_pool_id: importForm.default_pool_id || undefined,
       })
       mergeSummary(r)
       importResult.value = cloneAgg()
@@ -633,6 +650,7 @@ async function doImport() {
           update_existing: importForm.update_existing,
           default_client_id: importForm.default_client_id || undefined,
           default_proxy_id: importForm.default_proxy_id || undefined,
+          default_pool_id: importForm.default_pool_id || undefined,
         })
         mergeSummary(r)
         for (const it of r.results) {
@@ -682,6 +700,7 @@ function cloneAgg(): accountApi.ImportSummary {
 onMounted(() => {
   fetchList()
   fetchProxies()
+  fetchPools()
   loadAutoRefresh()
 })
 </script>
@@ -745,6 +764,11 @@ onMounted(() => {
             style="width: 260px"
             @keyup.enter="onSearch"
           />
+        </el-form-item>
+        <el-form-item label="账号池">
+          <el-select v-model="filter.pool_id" placeholder="全部" clearable style="width: 180px">
+            <el-option v-for="p in pools" :key="p.id" :label="`${p.name} (${p.code})`" :value="p.id" />
+          </el-select>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="onSearch">搜索</el-button>
@@ -1181,6 +1205,13 @@ onMounted(() => {
           <el-select v-model="importForm.default_proxy_id" clearable size="small" style="width: 220px">
             <el-option :value="0" label="不绑定" />
             <el-option v-for="p in proxies" :key="p.id" :label="`#${p.id} ${p.remark || p.host}:${p.port}`" :value="p.id" />
+          </el-select>
+        </div>
+        <div>
+          <span class="muted" style="margin-right: 6px">默认账号池</span>
+          <el-select v-model="importForm.default_pool_id" clearable size="small" style="width: 220px">
+            <el-option :value="0" label="不归池" />
+            <el-option v-for="p in pools" :key="p.id" :label="`${p.name} (${p.code})`" :value="p.id" />
           </el-select>
         </div>
       </div>

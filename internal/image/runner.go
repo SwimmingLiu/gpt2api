@@ -52,6 +52,8 @@ type RunOptions struct {
 	PerAttemptTimeout time.Duration      // 单次尝试总超时,默认 5min
 	PollMaxWait       time.Duration      // 轮询最长等待,默认 300s
 	References        []ReferenceImage   // 图生图/编辑:参考图
+	PoolID            uint64
+	FallbackPoolID    uint64
 }
 
 // RunResult 是单次生图的输出。
@@ -149,7 +151,10 @@ func (r *Runner) Run(ctx context.Context, opt RunOptions) *RunResult {
 // result 会被就地更新(ConversationID / FileIDs / SignedURLs / AccountID 等)。
 func (r *Runner) runOnce(ctx context.Context, opt RunOptions, result *RunResult) (bool, string, error) {
 	// 1) 调度账号
-	lease, err := r.sched.Dispatch(ctx, "image")
+	lease, err := r.sched.Dispatch(ctx, "image", scheduler.DispatchOptions{PoolID: opt.PoolID})
+	if err != nil && errors.Is(err, scheduler.ErrNoAvailable) && opt.FallbackPoolID > 0 {
+		lease, err = r.sched.Dispatch(ctx, "image", scheduler.DispatchOptions{PoolID: opt.FallbackPoolID})
+	}
 	if err != nil {
 		if errors.Is(err, scheduler.ErrNoAvailable) {
 			return false, ErrNoAccount, err

@@ -15,10 +15,16 @@ import (
 type Service struct {
 	dao    *DAO
 	cipher *crypto.AESGCM
+	bindPool func(ctx context.Context, poolID, accountID uint64) error
 }
 
 func NewService(dao *DAO, cipher *crypto.AESGCM) *Service {
 	return &Service{dao: dao, cipher: cipher}
+}
+
+// SetPoolBinder 注入账号池服务,供导入时做默认归池。
+func (s *Service) SetPoolBinder(fn func(ctx context.Context, poolID, accountID uint64) error) {
+	s.bindPool = fn
 }
 
 // CreateInput 新增账号入参(明文敏感字段)。
@@ -226,8 +232,8 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Account, error) {
 	return s.dao.GetByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, status, keyword string, offset, limit int) ([]*Account, int64, error) {
-	return s.dao.List(ctx, status, keyword, offset, limit)
+func (s *Service) List(ctx context.Context, status, keyword string, poolID uint64, offset, limit int) ([]*Account, int64, error) {
+	return s.dao.List(ctx, status, keyword, poolID, offset, limit)
 }
 
 // BindProxy 绑定代理(一号一代理)。

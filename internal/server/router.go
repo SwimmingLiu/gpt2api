@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/432539/gpt2api/internal/account"
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
@@ -35,6 +36,7 @@ type Deps struct {
 	KeyH       *apikey.Handler
 	ProxyH     *proxy.Handler
 	AccountH   *account.Handler
+	AccountPoolH *accountpool.Handler
 
 	GatewayH *gateway.Handler
 	ImagesH  *gateway.ImagesHandler
@@ -202,6 +204,31 @@ func New(d *Deps) *gin.Engine {
 				ag.POST("/:id/probe-quota", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.ProbeQuota)
 				ag.POST("/:id/bind-proxy", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.BindProxy)
 				ag.DELETE("/:id/bind-proxy", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.UnbindProxy)
+			}
+
+			if d.AccountPoolH != nil {
+				pg := admin.Group("/account-pools", middleware.RequirePerm(rbac.PermAccountRead, rbac.PermAccountWrite))
+				{
+					pg.GET("", d.AccountPoolH.ListPools)
+					pg.POST("", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.CreatePool)
+					pg.GET("/:id", d.AccountPoolH.GetPool)
+					pg.PATCH("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpdatePool)
+					pg.DELETE("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.DeletePool)
+					pg.GET("/:id/members", d.AccountPoolH.ListMembers)
+					pg.POST("/:id/members", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpsertMember)
+					pg.PATCH("/:id/members/:memberId", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpsertMember)
+					pg.DELETE("/:id/members/:memberId", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.DeleteMember)
+				}
+
+				admin.GET("/account-pool-routes",
+					middleware.RequirePerm(rbac.PermModelRead, rbac.PermModelWrite),
+					d.AccountPoolH.ListRoutes)
+				admin.PUT("/account-pool-routes/:modelId",
+					middleware.RequirePerm(rbac.PermModelWrite),
+					d.AccountPoolH.PutRoute)
+				admin.DELETE("/account-pool-routes/:modelId",
+					middleware.RequirePerm(rbac.PermModelWrite),
+					d.AccountPoolH.DeleteRoute)
 			}
 
 			// ---- 用户管理 ----

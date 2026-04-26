@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/432539/gpt2api/internal/account"
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
@@ -99,6 +100,15 @@ func main() {
 
 	accDAO := account.NewDAO(sqldb)
 	accSvc := account.NewService(accDAO, cipher)
+	poolDAO := accountpool.NewDAO(sqldb)
+	poolSvc := accountpool.NewService(poolDAO)
+	poolH := accountpool.NewHTTPHandler(poolSvc)
+	accSvc.SetPoolBinder(func(ctx context.Context, poolID, accountID uint64) error {
+		_, err := poolSvc.UpsertMember(ctx, poolID, 0, accountpool.UpsertMemberInput{
+			AccountID: accountID,
+		})
+		return err
+	})
 
 	keyDAO := apikey.NewDAO(sqldb)
 	keySvc := apikey.NewService(keyDAO)
@@ -139,6 +149,7 @@ func main() {
 		Limiter:   limiter,
 		Usage:     usageLogger,
 		AccSvc:    accSvc,
+		PoolSvc:   poolSvc,
 	}
 
 	imageDAO := image.NewDAO(sqldb)
@@ -172,6 +183,9 @@ func main() {
 	adminUsageH := usage.NewAdminHandler(usageQDAO)
 	meUsageH := usage.NewMeHandler(usageQDAO)
 	meImageH := image.NewMeHandler(imageDAO)
+	meImageH.SetURLBuilder(func(taskID string, idx int) string {
+		return gateway.BuildImageProxyURL(taskID, idx, gateway.ImageProxyTTL)
+	})
 
 	mailSvc := mailer.New(mailer.Config{
 		Host:     cfg.SMTP.Host,
@@ -265,6 +279,7 @@ func main() {
 		KeyH:     apikey.NewHandler(keySvc),
 		ProxyH:   proxyH,
 		AccountH: accountH,
+		AccountPoolH: poolH,
 
 		GatewayH: gwH,
 		ImagesH:  imagesH,

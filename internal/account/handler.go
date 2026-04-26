@@ -73,7 +73,11 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	status := c.Query("status")
 	keyword := c.Query("keyword")
-	list, total, err := h.svc.List(c.Request.Context(), status, keyword, (page-1)*size, size)
+	var poolID uint64
+	if v := strings.TrimSpace(c.Query("pool_id")); v != "" {
+		poolID, _ = strconv.ParseUint(v, 10, 64)
+	}
+	list, total, err := h.svc.List(c.Request.Context(), status, keyword, poolID, (page-1)*size, size)
 	if err != nil {
 		resp.Internal(c, err.Error())
 		return
@@ -253,6 +257,7 @@ func (h *Handler) Import(c *gin.Context) {
 		UpdateExisting  *bool  `json:"update_existing"`
 		DefaultClientID string `json:"default_client_id"`
 		DefaultProxyID  uint64 `json:"default_proxy_id"`
+		DefaultPoolID   uint64 `json:"default_pool_id"`
 	}
 	// 支持 JSON body 或 multipart
 	ct := c.ContentType()
@@ -272,6 +277,11 @@ func (h *Handler) Import(c *gin.Context) {
 		if v := c.PostForm("default_proxy_id"); v != "" {
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				req.DefaultProxyID = n
+			}
+		}
+		if v := c.PostForm("default_pool_id"); v != "" {
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+				req.DefaultPoolID = n
 			}
 		}
 		// 多文件合并:允许前端一次上传 N 个 json
@@ -318,6 +328,7 @@ func (h *Handler) Import(c *gin.Context) {
 		UpdateExisting:  upd,
 		DefaultClientID: req.DefaultClientID,
 		DefaultProxyID:  req.DefaultProxyID,
+		DefaultPoolID:   req.DefaultPoolID,
 		BatchSize:       200,
 	}
 	summary := h.svc.ImportBatch(c.Request.Context(), items, opt)
@@ -353,6 +364,7 @@ func (h *Handler) ImportTokens(c *gin.Context) {
 		ClientID       string          `json:"client_id"`
 		UpdateExisting *bool           `json:"update_existing"`
 		DefaultProxyID uint64          `json:"default_proxy_id"`
+		DefaultPoolID  uint64          `json:"default_pool_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.BadRequest(c, "请求参数错误:"+err.Error())
@@ -404,6 +416,7 @@ func (h *Handler) ImportTokens(c *gin.Context) {
 		ClientID:        strings.TrimSpace(req.ClientID),
 		ProxyURL:        proxyURL,
 		DefaultProxyID:  req.DefaultProxyID,
+		DefaultPoolID:   req.DefaultPoolID,
 		UpdateExisting:  upd,
 		DefaultClientID: strings.TrimSpace(req.ClientID),
 	})

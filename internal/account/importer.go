@@ -53,6 +53,8 @@ type ImportOptions struct {
 	DefaultClientID string
 	// DefaultProxyID 新建账号时默认绑定的代理 id(0 = 不绑)。
 	DefaultProxyID uint64
+	// DefaultPoolID 新建账号时默认加入的账号池 id(0 = 不处理)。
+	DefaultPoolID uint64
 	// BatchSize 分批 commit 的大小(仅用于让出 CPU,每批做一次 context check)。默认 200。
 	BatchSize int
 }
@@ -446,6 +448,9 @@ func (s *Service) importOne(ctx context.Context, idx int, it ImportSource, opt I
 		if opt.DefaultProxyID > 0 {
 			_ = s.dao.SetBinding(ctx, id, opt.DefaultProxyID)
 		}
+		if opt.DefaultPoolID > 0 && s.bindPool != nil {
+			_ = s.bindPool(ctx, opt.DefaultPoolID, id)
+		}
 		out.Status = "created"
 		out.ID = id
 		return out
@@ -489,6 +494,9 @@ func (s *Service) importOne(ctx context.Context, idx int, it ImportSource, opt I
 		out.Status = "failed"
 		out.Reason = "更新失败:" + err.Error()
 		return out
+	}
+	if opt.DefaultPoolID > 0 && s.bindPool != nil {
+		_ = s.bindPool(ctx, opt.DefaultPoolID, existing.ID)
 	}
 	out.Status = "updated"
 	out.ID = existing.ID

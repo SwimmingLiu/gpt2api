@@ -20,6 +20,9 @@ type MeHandler struct{ dao *DAO }
 // NewMeHandler 构造。
 func NewMeHandler(dao *DAO) *MeHandler { return &MeHandler{dao: dao} }
 
+// SetURLBuilder 为兼容 main.go 预留;当前实现直接使用库内已保存 URL,因此为 no-op。
+func (h *MeHandler) SetURLBuilder(_ func(taskID string, idx int) string) {}
+
 // taskView 是对外返回的视图结构,解码 JSON 列 + 隐藏内部字段。
 type taskView struct {
 	ID             uint64    `json:"id"`

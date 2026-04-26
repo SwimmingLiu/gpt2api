@@ -37,6 +37,7 @@ type ImportTokensOptions struct {
 
 	// 下面几个直接透传给底层 ImportBatch。
 	DefaultProxyID  uint64
+	DefaultPoolID   uint64
 	UpdateExisting  bool
 	DefaultClientID string
 	BatchSize       int
@@ -133,6 +134,7 @@ func (s *Service) ImportTokensBatch(ctx context.Context, tokens []string, opts I
 		UpdateExisting:  opts.UpdateExisting,
 		DefaultClientID: clientID,
 		DefaultProxyID:  opts.DefaultProxyID,
+		DefaultPoolID:   opts.DefaultPoolID,
 		BatchSize:       opts.BatchSize,
 	})
 	sum.Total += batch.Total

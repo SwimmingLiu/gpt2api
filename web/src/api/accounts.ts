@@ -13,6 +13,7 @@ export interface Account {
   status: string                  // healthy / warned / throttled / suspicious / dead
   today_used_count: number
   notes: string
+  pool_ids?: number[]
   token_expires_at?: { Time: string; Valid: boolean } | string | null
   warned_at?:        { Time: string; Valid: boolean } | string | null
   cooldown_until?:   { Time: string; Valid: boolean } | string | null
@@ -40,7 +41,7 @@ export interface Page<T> {
 }
 
 export function listAccounts(params: {
-  page?: number; page_size?: number; status?: string; keyword?: string
+  page?: number; page_size?: number; status?: string; keyword?: string; pool_id?: number
 } = {}) {
   return http.get<any, Page<Account>>('/api/admin/accounts', { params })
 }
@@ -65,6 +66,7 @@ export interface AccountCreate {
   notes?: string
   cookies?: string
   proxy_id?: number
+  default_pool_id?: number
 }
 export interface AccountUpdate extends Partial<AccountCreate> {
   status?: string
@@ -117,6 +119,7 @@ export function importAccountsJSON(body: {
   update_existing?: boolean
   default_client_id?: string
   default_proxy_id?: number
+  default_pool_id?: number
 }) {
   return http.post<any, ImportSummary>('/api/admin/accounts/import', body)
 }
@@ -131,6 +134,7 @@ export interface ImportTokensBody {
   update_existing?: boolean
   /** RT/ST 换 AT 时走的代理(chatgpt.com / auth.openai.com),强烈推荐 */
   default_proxy_id?: number
+  default_pool_id?: number
 }
 
 export function importAccountsTokens(body: ImportTokensBody) {
@@ -139,13 +143,14 @@ export function importAccountsTokens(body: ImportTokensBody) {
 
 export function importAccountsFiles(
   files: File[],
-  opt: { update_existing?: boolean; default_client_id?: string; default_proxy_id?: number } = {}
+  opt: { update_existing?: boolean; default_client_id?: string; default_proxy_id?: number; default_pool_id?: number } = {}
 ) {
   const fd = new FormData()
   for (const f of files) fd.append('files', f, f.name)
   if (opt.update_existing !== undefined) fd.append('update_existing', String(opt.update_existing))
   if (opt.default_client_id) fd.append('default_client_id', opt.default_client_id)
   if (opt.default_proxy_id) fd.append('default_proxy_id', String(opt.default_proxy_id))
+  if (opt.default_pool_id) fd.append('default_pool_id', String(opt.default_pool_id))
   return http.post<any, ImportSummary>('/api/admin/accounts/import', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
