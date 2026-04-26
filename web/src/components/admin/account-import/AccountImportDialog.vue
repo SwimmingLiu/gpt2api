@@ -11,6 +11,7 @@ import type {
   DialogSubmitPayload,
   FileImportModel,
   ImportAdvancedOptions as ImportAdvancedOptionsModel,
+  ImportAdvancedOptionsVisibility,
   ImportDialogResultRow,
   ImportPaneKind,
   ManualAccountForm,
@@ -44,10 +45,7 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value),
 })
 
-const activePane = ref<ImportPaneKind>('access_token')
-const onlyFailed = ref(false)
-
-const advanced = reactive<ImportAdvancedOptionsModel>({
+const defaultAdvancedState = (): ImportAdvancedOptionsModel => ({
   update_existing: true,
   default_proxy_id: undefined,
   target_pool_id: undefined,
@@ -56,23 +54,18 @@ const advanced = reactive<ImportAdvancedOptionsModel>({
   kick_quota_probe: true,
 })
 
-const accessTokenModel = reactive<AccessTokenImportModel>({
+const defaultAccessTokenModel = (): AccessTokenImportModel => ({
   mode: 'at',
   tokens_text: '',
   client_id: '',
 })
 
-const cpaModel = reactive<FileImportModel>({
+const defaultFileImportModel = (): FileImportModel => ({
   text: '',
   files: [],
 })
 
-const sub2apiModel = reactive<FileImportModel>({
-  text: '',
-  files: [],
-})
-
-const manualModel = reactive<ManualAccountForm>({
+const defaultManualModel = (): ManualAccountForm => ({
   email: '',
   auth_token: '',
   refresh_token: '',
@@ -82,6 +75,28 @@ const manualModel = reactive<ManualAccountForm>({
   plan_type: 'plus',
   daily_image_quota: 100,
   notes: '',
+})
+
+const activePane = ref<ImportPaneKind>('access_token')
+const onlyFailed = ref(false)
+
+const advanced = reactive<ImportAdvancedOptionsModel>(defaultAdvancedState())
+
+const accessTokenModel = reactive<AccessTokenImportModel>(defaultAccessTokenModel())
+
+const cpaModel = reactive<FileImportModel>(defaultFileImportModel())
+
+const sub2apiModel = reactive<FileImportModel>(defaultFileImportModel())
+
+const manualModel = reactive<ManualAccountForm>(defaultManualModel())
+
+const advancedVisibility = computed<ImportAdvancedOptionsVisibility>(() => {
+  if (activePane.value === 'manual') {
+    return {
+      show_update_existing: false,
+    }
+  }
+  return {}
 })
 
 const filteredRows = computed(() => {
@@ -115,7 +130,11 @@ function buildPayload(): DialogSubmitPayload {
         payload: { ...sub2apiModel, files: [...sub2apiModel.files] },
       }
     case 'manual':
-      return { kind: 'manual', advanced: { ...advanced }, payload: { ...manualModel } }
+      return {
+        kind: 'manual',
+        advanced: { ...advanced, update_existing: false },
+        payload: { ...manualModel },
+      }
     default:
       return assertNeverPane(activePane.value)
   }
@@ -126,6 +145,16 @@ function normalizedTokenLines(text: string) {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function resetDialogState() {
+  activePane.value = 'access_token'
+  onlyFailed.value = false
+  Object.assign(advanced, defaultAdvancedState())
+  Object.assign(accessTokenModel, defaultAccessTokenModel())
+  Object.assign(cpaModel, defaultFileImportModel())
+  Object.assign(sub2apiModel, defaultFileImportModel())
+  Object.assign(manualModel, defaultManualModel())
 }
 
 function validateBeforeSubmit() {
@@ -177,10 +206,14 @@ function onSubmit() {
   if (!validateBeforeSubmit()) return
   emit('submit', buildPayload())
 }
+
+function onDialogClosed() {
+  resetDialogState()
+}
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="导入账号" width="960px" destroy-on-close>
+  <el-dialog v-model="visible" title="导入账号" width="960px" destroy-on-close @closed="onDialogClosed">
     <div class="dialog-layout">
       <div class="dialog-main">
         <el-tabs v-model="activePane">
@@ -209,6 +242,7 @@ function onSubmit() {
             :disabled="loading"
             :pool-options="poolOptions"
             :proxy-options="proxyOptions"
+            :visibility="advancedVisibility"
           />
         </el-card>
       </div>

@@ -1,28 +1,37 @@
 <script setup lang="ts">
-import type { ImportAdvancedOptions, SelectOption } from './types'
+import { computed } from 'vue'
+import type { ImportAdvancedOptions, ImportAdvancedOptionsVisibility, SelectOption } from './types'
 
 const model = defineModel<ImportAdvancedOptions>({
   required: true,
 })
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     proxyOptions?: SelectOption[]
     poolOptions?: SelectOption[]
     disabled?: boolean
+    visibility?: ImportAdvancedOptionsVisibility
   }>(),
   {
     proxyOptions: () => [],
     poolOptions: () => [],
     disabled: false,
+    visibility: () => ({}),
   },
 )
+
+const showUpdateExisting = computed(() => props.visibility.show_update_existing !== false)
+const disableUpdateExisting = computed(() => !!props.visibility.disable_update_existing)
 </script>
 
 <template>
   <el-form label-width="120px">
-    <el-form-item label="更新已有邮箱">
-      <el-switch v-model="model.update_existing" :disabled="disabled" />
+    <el-form-item v-if="showUpdateExisting" label="更新已有邮箱">
+      <el-switch v-model="model.update_existing" :disabled="props.disabled || disableUpdateExisting" />
+      <div v-if="disableUpdateExisting" class="option-hint">
+        当前导入模式不支持按邮箱更新已有账号。
+      </div>
     </el-form-item>
 
     <el-form-item label="默认代理">
@@ -31,11 +40,11 @@ withDefaults(
         clearable
         filterable
         placeholder="不指定"
-        :disabled="disabled"
+        :disabled="props.disabled"
         style="width: 100%"
       >
         <el-option
-          v-for="item in proxyOptions"
+          v-for="item in props.proxyOptions"
           :key="item.value"
           :label="item.label"
           :value="item.value"
@@ -53,11 +62,11 @@ withDefaults(
         clearable
         filterable
         placeholder="不加入账号池"
-        :disabled="disabled"
+        :disabled="props.disabled"
         style="width: 100%"
       >
         <el-option
-          v-for="item in poolOptions"
+          v-for="item in props.poolOptions"
           :key="item.value"
           :label="item.label"
           :value="item.value"
@@ -67,15 +76,15 @@ withDefaults(
     </el-form-item>
 
     <el-form-item label="尝试补全身份">
-      <el-switch v-model="model.resolve_identity" :disabled="disabled" />
+      <el-switch v-model="model.resolve_identity" :disabled="props.disabled" />
     </el-form-item>
 
     <el-form-item label="导入后刷新">
-      <el-switch v-model="model.kick_refresh" :disabled="disabled" />
+      <el-switch v-model="model.kick_refresh" :disabled="props.disabled" />
     </el-form-item>
 
     <el-form-item label="导入后探测额度">
-      <el-switch v-model="model.kick_quota_probe" :disabled="disabled" />
+      <el-switch v-model="model.kick_quota_probe" :disabled="props.disabled" />
     </el-form-item>
   </el-form>
 </template>

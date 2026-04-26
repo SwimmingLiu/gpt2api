@@ -17,6 +17,11 @@ export interface ImportAdvancedOptions {
   kick_quota_probe: boolean
 }
 
+export interface ImportAdvancedOptionsVisibility {
+  show_update_existing?: boolean
+  disable_update_existing?: boolean
+}
+
 export interface ImportDialogResultRow {
   index: number
   source_type?: string
