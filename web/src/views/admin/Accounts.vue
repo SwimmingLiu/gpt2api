@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import * as accountApi from '@/api/accounts'
+import * as importSourceApi from '@/api/account-import-sources'
 import { http } from '@/api/http'
 import * as proxyApi from '@/api/proxies'
 import AccountImportDialog from '@/components/admin/account-import/AccountImportDialog.vue'
@@ -600,6 +601,24 @@ async function submitJSONLikeImport(
   })
 }
 
+async function submitRemoteImport(
+  model: FileImportModel,
+  kind: 'cpa' | 'sub2api',
+  advanced: DialogSubmitPayload['advanced'],
+) {
+  if (!model.source_id) throw new Error('missing remote source id')
+  return importSourceApi.importRemoteAccountSource(model.source_id, {
+    account_ids: kind === 'sub2api' ? model.selected_remote_ids : undefined,
+    file_names: kind === 'cpa' ? model.selected_remote_ids : undefined,
+    update_existing: advanced.update_existing,
+    default_proxy_id: advanced.default_proxy_id,
+    target_pool_id: advanced.target_pool_id,
+    resolve_identity: advanced.resolve_identity,
+    kick_refresh: advanced.kick_refresh,
+    kick_quota_probe: advanced.kick_quota_probe,
+  })
+}
+
 function assertNeverPayload(value: never): never {
   throw new Error(`unsupported import payload: ${JSON.stringify(value)}`)
 }
@@ -629,13 +648,19 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
       }
       case 'cpa':
       case 'sub2api': {
-        const result = await submitJSONLikeImport(
-          payload.payload,
-          payload.kind === 'cpa' ? 'cpa_file' : 'sub2api_json',
-          payload.advanced,
-        )
+        const result = payload.payload.mode === 'remote'
+          ? await submitRemoteImport(payload.payload, payload.kind, payload.advanced)
+          : await submitJSONLikeImport(
+              payload.payload,
+              payload.kind === 'cpa' ? 'cpa_file' : 'sub2api_json',
+              payload.advanced,
+            )
         nextRows = toResultRows(result)
-        showImportSummary(result, payload.kind === 'cpa' ? 'CPA 导入完成' : 'sub2api 导入完成')
+        const modeLabel = payload.payload.mode === 'remote' ? '远程导入' : '导入'
+        showImportSummary(
+          result,
+          payload.kind === 'cpa' ? `CPA ${modeLabel}完成` : `sub2api ${modeLabel}完成`,
+        )
         break
       }
       case 'manual': {

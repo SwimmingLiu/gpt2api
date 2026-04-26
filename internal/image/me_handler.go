@@ -15,10 +15,20 @@ import (
 // MeHandler 面向当前用户的图片任务只读接口(JWT 鉴权)。
 // 与 /v1/images/tasks/:id(API Key 鉴权)共享同一张 image_tasks 表,
 // 只是入口改到 /api/me/images/* 便于前端面板调用。
-type MeHandler struct{ dao *DAO }
+type MeHandler struct {
+	dao        *DAO
+	urlBuilder URLBuilder
+}
 
 // NewMeHandler 构造。
 func NewMeHandler(dao *DAO) *MeHandler { return &MeHandler{dao: dao} }
+
+// URLBuilder 用于把 task_id + idx 转成可访问的图片 URL。
+// 由 main 注入,避免 image 包直接依赖 gateway 包造成循环依赖。
+type URLBuilder func(taskID string, idx int) string
+
+// SetURLBuilder 注入图片 URL 构造器(可选)。
+func (h *MeHandler) SetURLBuilder(b URLBuilder) { h.urlBuilder = b }
 
 // taskView 是对外返回的视图结构,解码 JSON 列 + 隐藏内部字段。
 type taskView struct {
@@ -41,11 +51,24 @@ type taskView struct {
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 }
 
-func toView(t *Task) taskView {
+func toView(t *Task, builder URLBuilder) taskView {
 	urls := t.DecodeResultURLs()
 	fids := t.DecodeFileIDs()
 	for i, id := range fids {
 		fids[i] = strings.TrimPrefix(id, "sed:")
+	}
+	if builder != nil {
+		urlCount := len(fids)
+		if urlCount == 0 {
+			urlCount = len(urls)
+		}
+		if urlCount > 0 {
+			rebuilt := make([]string, 0, urlCount)
+			for i := 0; i < urlCount; i++ {
+				rebuilt = append(rebuilt, builder(t.TaskID, i))
+			}
+			urls = rebuilt
+		}
 	}
 	return taskView{
 		ID: t.ID, TaskID: t.TaskID, UserID: t.UserID, ModelID: t.ModelID,
@@ -82,7 +105,7 @@ func (h *MeHandler) List(c *gin.Context) {
 	}
 	items := make([]taskView, 0, len(tasks))
 	for i := range tasks {
-		items = append(items, toView(&tasks[i]))
+		items = append(items, toView(&tasks[i], h.urlBuilder))
 	}
 	resp.OK(c, gin.H{"items": items, "limit": limit, "offset": offset})
 }
@@ -112,5 +135,5 @@ func (h *MeHandler) Get(c *gin.Context) {
 		resp.Fail(c, 40400, "task not found")
 		return
 	}
-	resp.OK(c, toView(t))
+	resp.OK(c, toView(t, h.urlBuilder))
 }

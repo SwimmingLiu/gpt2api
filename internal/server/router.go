@@ -4,6 +4,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/432539/gpt2api/internal/account"
+	"github.com/432539/gpt2api/internal/accountpool"
+	"github.com/432539/gpt2api/internal/accountsource"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
@@ -31,19 +33,21 @@ type Deps struct {
 	AuthH *auth.Handler
 	UserH *user.Handler
 
-	KeySvc     *apikey.Service
-	KeyH       *apikey.Handler
-	ProxyH     *proxy.Handler
-	AccountH   *account.Handler
+	KeySvc         *apikey.Service
+	KeyH           *apikey.Handler
+	ProxyH         *proxy.Handler
+	AccountH       *account.Handler
+	AccountPoolH   *accountpool.Handler
+	AccountSourceH *accountsource.Handler
 
 	GatewayH *gateway.Handler
 	ImagesH  *gateway.ImagesHandler
 
-	BackupH      *backup.Handler
-	AuditH       *audit.Handler
-	AuditDAO     *audit.DAO
-	AdminUserH   *user.AdminHandler
-	AdminGroupH  *user.AdminGroupHandler
+	BackupH     *backup.Handler
+	AuditH      *audit.Handler
+	AuditDAO    *audit.DAO
+	AdminUserH  *user.AdminHandler
+	AdminGroupH *user.AdminGroupHandler
 
 	AdminModelH *model.AdminHandler
 	AdminKeyH   *apikey.AdminHandler
@@ -202,6 +206,46 @@ func New(d *Deps) *gin.Engine {
 				ag.POST("/:id/probe-quota", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.ProbeQuota)
 				ag.POST("/:id/bind-proxy", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.BindProxy)
 				ag.DELETE("/:id/bind-proxy", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountH.UnbindProxy)
+			}
+
+			if d.AccountPoolH != nil {
+				pg := admin.Group("/account-pools", middleware.RequirePerm(rbac.PermAccountRead, rbac.PermAccountWrite))
+				{
+					pg.GET("", d.AccountPoolH.ListPools)
+					pg.POST("", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.CreatePool)
+					pg.GET("/:id", d.AccountPoolH.GetPool)
+					pg.PATCH("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpdatePool)
+					pg.DELETE("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.DeletePool)
+					pg.GET("/:id/members", d.AccountPoolH.ListMembers)
+					pg.POST("/:id/members", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpsertMember)
+					pg.PATCH("/:id/members/:memberId", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.UpsertMember)
+					pg.DELETE("/:id/members/:memberId", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountPoolH.DeleteMember)
+				}
+
+				admin.GET("/account-pool-routes",
+					middleware.RequirePerm(rbac.PermModelRead, rbac.PermModelWrite),
+					d.AccountPoolH.ListRoutes)
+				admin.PUT("/account-pool-routes/:modelId",
+					middleware.RequirePerm(rbac.PermModelWrite),
+					d.AccountPoolH.PutRoute)
+				admin.DELETE("/account-pool-routes/:modelId",
+					middleware.RequirePerm(rbac.PermModelWrite),
+					d.AccountPoolH.DeleteRoute)
+			}
+
+			if d.AccountSourceH != nil {
+				sg := admin.Group("/account-import-sources", middleware.RequirePerm(rbac.PermAccountRead, rbac.PermAccountWrite))
+				{
+					sg.GET("", d.AccountSourceH.List)
+					sg.POST("", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Create)
+					sg.GET("/:id", d.AccountSourceH.Get)
+					sg.PATCH("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Update)
+					sg.DELETE("/:id", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.Delete)
+					sg.GET("/:id/sub2api/groups", d.AccountSourceH.ListSub2APIGroups)
+					sg.GET("/:id/sub2api/accounts", d.AccountSourceH.ListSub2APIAccounts)
+					sg.GET("/:id/cpa/files", d.AccountSourceH.ListCPAFiles)
+					sg.POST("/:id/import", middleware.RequirePerm(rbac.PermAccountWrite), d.AccountSourceH.ImportSelected)
+				}
 			}
 
 			// ---- 用户管理 ----

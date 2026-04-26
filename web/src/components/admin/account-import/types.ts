@@ -1,6 +1,7 @@
 export type ImportPaneKind = 'access_token' | 'cpa' | 'sub2api' | 'manual'
 
 export type TokenImportMode = 'at' | 'rt' | 'st'
+export type FileImportMode = 'local' | 'remote'
 
 export interface SelectOption {
   label: string
@@ -40,8 +41,11 @@ export interface AccessTokenImportModel {
 }
 
 export interface FileImportModel {
+  mode: FileImportMode
   text: string
   files: File[]
+  source_id?: number
+  selected_remote_ids: string[]
 }
 
 export interface ManualAccountForm {

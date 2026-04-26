@@ -61,8 +61,11 @@ const defaultAccessTokenModel = (): AccessTokenImportModel => ({
 })
 
 const defaultFileImportModel = (): FileImportModel => ({
+  mode: 'local',
   text: '',
   files: [],
+  source_id: undefined,
+  selected_remote_ids: [],
 })
 
 const defaultManualModel = (): ManualAccountForm => ({
@@ -184,6 +187,17 @@ function validateBeforeSubmit() {
   }
 
   if (activePane.value === 'cpa') {
+    if (cpaModel.mode === 'remote') {
+      if (!cpaModel.source_id) {
+        ElMessage.warning('请选择一个 CPA 远程源')
+        return false
+      }
+      if (cpaModel.selected_remote_ids.length === 0) {
+        ElMessage.warning('请至少选择一个远程 CPA 文件')
+        return false
+      }
+      return true
+    }
     if (!cpaModel.text.trim() && cpaModel.files.length === 0) {
       ElMessage.warning('请提供 CPA 文本或至少选择一个文件')
       return false
@@ -192,6 +206,17 @@ function validateBeforeSubmit() {
   }
 
   if (activePane.value === 'sub2api') {
+    if (sub2apiModel.mode === 'remote') {
+      if (!sub2apiModel.source_id) {
+        ElMessage.warning('请选择一个 sub2api 远程源')
+        return false
+      }
+      if (sub2apiModel.selected_remote_ids.length === 0) {
+        ElMessage.warning('请至少选择一个远程 sub2api 账号')
+        return false
+      }
+      return true
+    }
     if (!sub2apiModel.text.trim() && sub2apiModel.files.length === 0) {
       ElMessage.warning('请提供 sub2api 文本或至少选择一个文件')
       return false

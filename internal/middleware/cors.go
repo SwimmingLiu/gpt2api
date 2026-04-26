@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,7 @@ func CORS(origins []string) gin.HandlerFunc {
 			c.Writer.Header().Set("Vary", "Origin")
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id")
+			c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeaders(c.GetHeader("Access-Control-Request-Headers")))
 			c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Request-Id")
 			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 		}
@@ -38,4 +39,29 @@ func CORS(origins []string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func allowHeaders(requested string) string {
+	set := map[string]string{
+		"authorization":   "Authorization",
+		"content-type":    "Content-Type",
+		"x-request-id":    "X-Request-Id",
+		"x-admin-confirm": "X-Admin-Confirm",
+	}
+	for _, part := range strings.Split(requested, ",") {
+		h := strings.TrimSpace(part)
+		if h == "" {
+			continue
+		}
+		key := strings.ToLower(h)
+		if _, ok := set[key]; !ok {
+			set[key] = h
+		}
+	}
+	keys := make([]string, 0, len(set))
+	for _, v := range set {
+		keys = append(keys, v)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
