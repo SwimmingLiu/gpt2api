@@ -12,11 +12,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/432539/gpt2api/internal/account"
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/config"
 	"github.com/432539/gpt2api/internal/proxy"
 	"github.com/432539/gpt2api/pkg/lock"
@@ -61,24 +63,93 @@ type RuntimeParams struct {
 	QueueWaitSec func() int
 }
 
-// DispatchOptions 控制一次调度的范围。
-type DispatchOptions struct {
-	PoolID uint64
+type accountSchedulerDAO interface {
+	GetByID(ctx context.Context, id uint64) (*account.Account, error)
+	EnsureDeviceID(ctx context.Context, id uint64, deviceID string) (string, error)
+	EnsureSessionID(ctx context.Context, id uint64, sessionID string) (string, error)
+	MarkUsed(ctx context.Context, id uint64, today time.Time) error
+	SetStatus(ctx context.Context, id uint64, status string, cooldownUntil *time.Time) error
+}
+
+type accountRuntime interface {
+	DAO() accountSchedulerDAO
+	DecryptAuthToken(a *account.Account) (string, error)
+	GetBinding(ctx context.Context, accountID uint64) (*account.Binding, error)
+}
+
+type proxyRuntime interface {
+	Get(ctx context.Context, id uint64) (*proxy.Proxy, error)
+	BuildURL(p *proxy.Proxy) (string, error)
+}
+
+type poolRuntime interface {
+	ResolvePool(ctx context.Context, poolID uint64) (accountpool.ResolvedPool, error)
+}
+
+type locker interface {
+	Acquire(ctx context.Context, key, token string, ttl time.Duration) error
+	Release(ctx context.Context, key, token string) error
 }
 
 // Scheduler 账号调度器。
 type Scheduler struct {
-	accSvc   *account.Service
-	proxySvc *proxy.Service
-	lock     *lock.RedisLock
+	accSvc   accountRuntime
+	proxySvc proxyRuntime
+	poolSvc  poolRuntime
+	lock     locker
 	cfg      config.SchedulerConfig
 	rt       RuntimeParams
 }
 
-func New(
+type accountServiceAdapter struct {
+	svc *account.Service
+}
+
+func (a accountServiceAdapter) DAO() accountSchedulerDAO {
+	return a.svc.DAO()
+}
+
+func (a accountServiceAdapter) DecryptAuthToken(acc *account.Account) (string, error) {
+	return a.svc.DecryptAuthToken(acc)
+}
+
+func (a accountServiceAdapter) GetBinding(ctx context.Context, accountID uint64) (*account.Binding, error) {
+	return a.svc.GetBinding(ctx, accountID)
+}
+
+type proxyServiceAdapter struct {
+	svc *proxy.Service
+}
+
+func (p proxyServiceAdapter) Get(ctx context.Context, id uint64) (*proxy.Proxy, error) {
+	return p.svc.Get(ctx, id)
+}
+
+func (p proxyServiceAdapter) BuildURL(pr *proxy.Proxy) (string, error) {
+	return p.svc.BuildURL(pr)
+}
+
+func NewWithServices(
 	accSvc *account.Service,
 	proxySvc *proxy.Service,
+	poolSvc *accountpool.Service,
 	rl *lock.RedisLock,
+	cfg config.SchedulerConfig,
+) *Scheduler {
+	return New(
+		accountServiceAdapter{svc: accSvc},
+		proxyServiceAdapter{svc: proxySvc},
+		poolSvc,
+		rl,
+		cfg,
+	)
+}
+
+func New(
+	accSvc accountRuntime,
+	proxySvc proxyRuntime,
+	poolSvc poolRuntime,
+	rl locker,
 	cfg config.SchedulerConfig,
 ) *Scheduler {
 	if cfg.LockTTLSec <= 0 {
@@ -93,7 +164,7 @@ func New(
 	if cfg.Cooldown429Sec <= 0 {
 		cfg.Cooldown429Sec = 300
 	}
-	return &Scheduler{accSvc: accSvc, proxySvc: proxySvc, lock: rl, cfg: cfg}
+	return &Scheduler{accSvc: accSvc, proxySvc: proxySvc, poolSvc: poolSvc, lock: rl, cfg: cfg}
 }
 
 // SetRuntime 注入运行期可热更的参数。建议在 main 里一次性设置:
@@ -142,14 +213,14 @@ func (s *Scheduler) queueWait() time.Duration {
 	return 120 * time.Second
 }
 
-// Dispatch 为本次请求挑选一个账号并加锁。调用方必须 defer lease.Release(ctx)。
+// Dispatch 为本次请求按账号池路由挑选一个账号并加锁。调用方必须 defer lease.Release(ctx)。
 //
 // 语义(一号一任务 + 排队):
 //   - 同账号同时只允许 1 个请求持有 Redis 锁(acct:lock:{id},SETNX+TTL)。
 //   - 扫一遍所有 candidate 都被锁住 / 不满足 min_interval / 日配额时,
 //     不立即返回失败,而是按指数退避轮询重试,直到拿到锁或超过 queueWait。
 //   - queueWait=0 时退化为老语义(扫一次,失败即返回 ErrNoAvailable)。
-func (s *Scheduler) Dispatch(ctx context.Context, modelType string, opt DispatchOptions) (*Lease, error) {
+func (s *Scheduler) Dispatch(ctx context.Context, route accountpool.DispatchRoute) (*Lease, error) {
 	deadline := time.Now().Add(s.queueWait())
 
 	const (
@@ -163,7 +234,7 @@ func (s *Scheduler) Dispatch(ctx context.Context, modelType string, opt Dispatch
 
 	for {
 		attempt++
-		lease, err := s.tryDispatchOnce(ctx, modelType, opt)
+		lease, err := s.tryDispatchOnce(ctx, route)
 		if err == nil {
 			if attempt > 1 {
 				logger.L().Info("scheduler queued dispatch ok",
@@ -201,29 +272,65 @@ func (s *Scheduler) Dispatch(ctx context.Context, modelType string, opt Dispatch
 	}
 }
 
-// tryDispatchOnce 扫一遍 candidate,尝试为其中一个加锁;
-// 全部 candidate 都被锁 / 不满足 min_interval / 日配额时返回 ErrNoAvailable。
-func (s *Scheduler) tryDispatchOnce(ctx context.Context, modelType string, opt DispatchOptions) (*Lease, error) {
-	limit := 30
-	dao := s.accSvc.DAO()
-	var candidates []*account.Account
-	var err error
-	if opt.PoolID > 0 {
-		candidates, err = dao.ListDispatchableByPool(ctx, opt.PoolID, limit)
-	} else {
-		candidates, err = dao.ListDispatchable(ctx, limit)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("scheduler list: %w", err)
-	}
-	if len(candidates) == 0 {
+func (s *Scheduler) tryDispatchOnce(ctx context.Context, route accountpool.DispatchRoute) (*Lease, error) {
+	if route.PrimaryPoolID == 0 {
 		return nil, ErrNoAvailable
 	}
+	lease, err := s.tryDispatchPool(ctx, route.PrimaryPoolID)
+	if err == nil {
+		return lease, nil
+	}
+	if route.AllowFallback && route.FallbackPoolID > 0 {
+		return s.tryDispatchPool(ctx, route.FallbackPoolID)
+	}
+	return nil, err
+}
+
+func (s *Scheduler) tryDispatchPool(ctx context.Context, poolID uint64) (*Lease, error) {
+	if s.poolSvc == nil {
+		return nil, ErrNoAvailable
+	}
+	resolved, err := s.poolSvc.ResolvePool(ctx, poolID)
+	if err != nil {
+		if errors.Is(err, accountpool.ErrNotFound) || errors.Is(err, accountpool.ErrPoolDisabled) {
+			return nil, ErrNoAvailable
+		}
+		return nil, fmt.Errorf("resolve pool %d: %w", poolID, err)
+	}
+	members := make([]*accountpool.Member, 0, len(resolved.Members))
+	for _, member := range resolved.Members {
+		if member == nil || !member.Enabled {
+			continue
+		}
+		members = append(members, member)
+	}
+	sort.SliceStable(members, func(i, j int) bool {
+		if members[i].Priority != members[j].Priority {
+			return members[i].Priority < members[j].Priority
+		}
+		if members[i].Weight != members[j].Weight {
+			return members[i].Weight > members[j].Weight
+		}
+		return members[i].ID < members[j].ID
+	})
 
 	now := time.Now()
 	minInterval := time.Duration(s.cfg.MinIntervalSec) * time.Second
 
-	for _, acc := range candidates {
+	for _, member := range members {
+		acc, err := s.accSvc.DAO().GetByID(ctx, member.AccountID)
+		if err != nil || acc == nil {
+			continue
+		}
+		if acc.Status != account.StatusHealthy {
+			continue
+		}
+		if acc.CooldownUntil.Valid && acc.CooldownUntil.Time.After(now) {
+			continue
+		}
+		if acc.TokenExpiresAt.Valid && !acc.TokenExpiresAt.Time.After(now) {
+			continue
+		}
 		if acc.LastUsedAt.Valid && now.Sub(acc.LastUsedAt.Time) < minInterval {
 			continue
 		}
@@ -242,26 +349,12 @@ func (s *Scheduler) tryDispatchOnce(ctx context.Context, modelType string, opt D
 			return lease, nil
 		}
 		if errors.Is(err, lock.ErrNotAcquired) {
-			// 被别的请求占用,下一个候选
 			continue
 		}
 		logger.L().Warn("scheduler tryLock error",
 			zap.Uint64("account_id", acc.ID), zap.Error(err))
 	}
 	return nil, ErrNoAvailable
-}
-
-func filterByAllowedAccounts(candidates []*account.Account, allowed map[uint64]struct{}) []*account.Account {
-	if len(allowed) == 0 {
-		return candidates
-	}
-	out := make([]*account.Account, 0, len(candidates))
-	for _, acc := range candidates {
-		if _, ok := allowed[acc.ID]; ok {
-			out = append(out, acc)
-		}
-	}
-	return out
 }
 
 func (s *Scheduler) tryLock(ctx context.Context, acc *account.Account) (*Lease, error) {

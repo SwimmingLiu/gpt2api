@@ -2,6 +2,17 @@ package accountpool
 
 import "time"
 
+// DispatchRoute 是图片请求进入调度器前的稳定路由契约。
+// Phase 1 只表达主池 / fallback 池,后续可在此扩展 sticky/source 等维度。
+type DispatchRoute struct {
+	ModelID        uint64 `json:"model_id"`
+	PrimaryPoolID  uint64 `json:"primary_pool_id"`
+	FallbackPoolID uint64 `json:"fallback_pool_id"`
+	AllowFallback  bool   `json:"allow_fallback"`
+	LegacyGlobal   bool   `json:"legacy_global,omitempty"`
+	Source         string `json:"source,omitempty"`
+}
+
 // Pool 对应 account_pools 表。
 type Pool struct {
 	ID               uint64     `db:"id" json:"id"`
@@ -47,4 +58,14 @@ type ResolvedRoute struct {
 	PoolID         uint64 `json:"pool_id"`
 	FallbackPoolID uint64 `json:"fallback_pool_id"`
 	LegacyGlobal   bool   `json:"legacy_global"`
+}
+
+// ResolvedPool 是调度器侧看到的池快照。
+// Phase 1 语义:
+//   - priority: 数值越小优先级越高
+//   - weight: 同优先级内按数值从大到小做稳定排序
+//   - max_parallel: 当前全局仍是一号一锁,有效语义会被收敛到 >=1 的占位值
+type ResolvedPool struct {
+	Pool    *Pool     `json:"pool"`
+	Members []*Member `json:"members"`
 }

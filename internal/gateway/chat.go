@@ -47,9 +47,6 @@ type Handler struct {
 	AccSvc    interface {
 		DecryptCookies(ctx context.Context, accountID uint64) (string, error)
 	}
-	PoolSvc interface {
-		ResolveModelRoute(ctx context.Context, modelID uint64) (accountpool.ResolvedRoute, error)
-	}
 	// Images 可选:若挂载,chat/completions 里指定图像模型会自动转派。
 	Images *ImagesHandler
 
@@ -233,23 +230,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 
 	// 4) 调度账号
-	route := accountpool.ResolvedRoute{LegacyGlobal: true}
-	if h.PoolSvc != nil {
-		route, err = h.PoolSvc.ResolveModelRoute(c.Request.Context(), m.ID)
-		if err != nil {
-			refund("pool_route_error")
-			openAIError(c, http.StatusInternalServerError, "internal_error", "账号池路由解析失败:"+err.Error())
-			return
-		}
-	}
-	lease, err := h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat, scheduler.DispatchOptions{
-		PoolID: route.PoolID,
-	})
-	if err != nil && errors.Is(err, scheduler.ErrNoAvailable) && route.FallbackPoolID > 0 {
-		lease, err = h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat, scheduler.DispatchOptions{
-			PoolID: route.FallbackPoolID,
-		})
-	}
+	lease, err := h.Scheduler.Dispatch(c.Request.Context(), accountpool.DispatchRoute{LegacyGlobal: true})
 	if err != nil {
 		refund("no_account_available")
 		openAIError(c, http.StatusServiceUnavailable, "no_account_available", "账号池暂无可用账号,请稍后重试")
@@ -662,6 +643,9 @@ func (h *Handler) ListModels(c *gin.Context) {
 	}
 	data := make([]gin.H, 0, len(list))
 	for _, m := range list {
+		if m.Slug != "gpt-image-2" {
+			continue
+		}
 		data = append(data, gin.H{
 			"id":       m.Slug,
 			"object":   "model",

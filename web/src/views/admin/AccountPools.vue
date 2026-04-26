@@ -1,33 +1,34 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import * as poolApi from '@/api/accountPools'
-import * as accountApi from '@/api/accounts'
-import { useUserStore } from '@/stores/user'
-
-const userStore = useUserStore()
-const canWrite = computed(() => userStore.hasPerm('account:write'))
+import * as poolApi from '@/api/account-pools'
 
 const loading = ref(false)
-const rows = ref<poolApi.AccountPool[]>([])
+const savingPool = ref(false)
+const savingMember = ref(false)
+const pools = ref<poolApi.AccountPool[]>([])
 const members = ref<poolApi.AccountPoolMember[]>([])
-const accounts = ref<accountApi.Account[]>([])
-const currentPoolID = ref<number>(0)
+const selectedPoolId = ref<number | null>(null)
 
-const poolDlg = ref(false)
-const editingPoolID = ref(0)
+const selectedPool = computed(() =>
+  pools.value.find((item) => item.id === selectedPoolId.value) || null,
+)
+
+const poolDialog = ref(false)
 const poolForm = reactive({
+  id: 0,
   code: '',
   name: '',
-  pool_type: 'mixed',
+  pool_type: 'image',
   description: '',
   enabled: true,
   dispatch_strategy: 'least_recently_used',
   sticky_ttl_sec: 0,
 })
 
-const memberDlg = ref(false)
+const memberDialog = ref(false)
 const memberForm = reactive({
+  id: 0,
   account_id: 0,
   enabled: true,
   weight: 100,
@@ -36,51 +37,46 @@ const memberForm = reactive({
   note: '',
 })
 
-async function loadPools() {
+async function loadPools(preserveSelection = true) {
   loading.value = true
   try {
-    const d = await poolApi.listAccountPools()
-    rows.value = d.items || []
-    if (!currentPoolID.value && rows.value.length > 0) {
-      currentPoolID.value = rows.value[0].id
+    const data = await poolApi.listPools()
+    pools.value = data.items || []
+    if (!preserveSelection || !selectedPoolId.value || !pools.value.some((item) => item.id === selectedPoolId.value)) {
+      selectedPoolId.value = pools.value[0]?.id || null
     }
+    await loadMembers()
   } finally {
     loading.value = false
   }
-  await loadMembers()
 }
 
 async function loadMembers() {
-  if (!currentPoolID.value) {
+  if (!selectedPoolId.value) {
     members.value = []
     return
   }
-  const d = await poolApi.listPoolMembers(currentPoolID.value)
-  members.value = d.items || []
-}
-
-async function loadAccounts() {
-  const d = await accountApi.listAccounts({ page: 1, page_size: 1000 })
-  accounts.value = d.list || []
+  const data = await poolApi.listMembers(selectedPoolId.value)
+  members.value = data.items || []
 }
 
 function openCreatePool() {
-  editingPoolID.value = 0
   Object.assign(poolForm, {
+    id: 0,
     code: '',
     name: '',
-    pool_type: 'mixed',
+    pool_type: 'image',
     description: '',
     enabled: true,
     dispatch_strategy: 'least_recently_used',
     sticky_ttl_sec: 0,
   })
-  poolDlg.value = true
+  poolDialog.value = true
 }
 
 function openEditPool(row: poolApi.AccountPool) {
-  editingPoolID.value = row.id
   Object.assign(poolForm, {
+    id: row.id,
     code: row.code,
     name: row.name,
     pool_type: row.pool_type,
@@ -89,43 +85,45 @@ function openEditPool(row: poolApi.AccountPool) {
     dispatch_strategy: row.dispatch_strategy,
     sticky_ttl_sec: row.sticky_ttl_sec,
   })
-  poolDlg.value = true
+  poolDialog.value = true
 }
 
-async function submitPool() {
+async function savePool() {
+  savingPool.value = true
   try {
-    if (editingPoolID.value) {
-      await poolApi.updateAccountPool(editingPoolID.value, poolForm)
+    const body = {
+      code: poolForm.code,
+      name: poolForm.name,
+      pool_type: poolForm.pool_type,
+      description: poolForm.description,
+      enabled: poolForm.enabled,
+      dispatch_strategy: poolForm.dispatch_strategy,
+      sticky_ttl_sec: poolForm.sticky_ttl_sec,
+    }
+    if (poolForm.id > 0) {
+      await poolApi.updatePool(poolForm.id, body)
       ElMessage.success('账号池已更新')
     } else {
-      await poolApi.createAccountPool(poolForm)
+      await poolApi.createPool(body)
       ElMessage.success('账号池已创建')
     }
-    poolDlg.value = false
-    await loadPools()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    poolDialog.value = false
+    await loadPools(false)
+  } finally {
+    savingPool.value = false
   }
 }
 
-async function onDeletePool(row: poolApi.AccountPool) {
-  try {
-    await ElMessageBox.confirm(`确定删除账号池「${row.name}」?`, '删除确认', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  await poolApi.deleteAccountPool(row.id)
+async function removePool(row: poolApi.AccountPool) {
+  await ElMessageBox.confirm(`确认删除账号池「${row.name}」?`, '确认删除', { type: 'warning' })
+  await poolApi.deletePool(row.id)
   ElMessage.success('账号池已删除')
-  if (currentPoolID.value === row.id) currentPoolID.value = 0
-  await loadPools()
+  await loadPools(false)
 }
 
-function openAddMember() {
+function openCreateMember() {
   Object.assign(memberForm, {
+    id: 0,
     account_id: 0,
     enabled: true,
     weight: 100,
@@ -133,158 +131,223 @@ function openAddMember() {
     max_parallel: 1,
     note: '',
   })
-  memberDlg.value = true
+  memberDialog.value = true
 }
 
-async function submitMember() {
-  if (!currentPoolID.value || !memberForm.account_id) {
-    ElMessage.warning('请选择账号')
-    return
+function openEditMember(row: poolApi.AccountPoolMember) {
+  Object.assign(memberForm, {
+    id: row.id,
+    account_id: row.account_id,
+    enabled: row.enabled,
+    weight: row.weight,
+    priority: row.priority,
+    max_parallel: row.max_parallel,
+    note: row.note,
+  })
+  memberDialog.value = true
+}
+
+async function saveMember() {
+  if (!selectedPoolId.value) return
+  savingMember.value = true
+  try {
+    const body = {
+      account_id: memberForm.account_id,
+      enabled: memberForm.enabled,
+      weight: memberForm.weight,
+      priority: memberForm.priority,
+      max_parallel: memberForm.max_parallel,
+      note: memberForm.note,
+    }
+    if (memberForm.id > 0) {
+      await poolApi.updateMember(selectedPoolId.value, memberForm.id, body)
+      ElMessage.success('成员已更新')
+    } else {
+      await poolApi.createMember(selectedPoolId.value, body)
+      ElMessage.success('成员已添加')
+    }
+    memberDialog.value = false
+    await loadMembers()
+  } finally {
+    savingMember.value = false
   }
-  await poolApi.createPoolMember(currentPoolID.value, memberForm)
-  ElMessage.success('成员已加入账号池')
-  memberDlg.value = false
+}
+
+async function removeMember(row: poolApi.AccountPoolMember) {
+  if (!selectedPoolId.value) return
+  await ElMessageBox.confirm(`确认移除账号 #${row.account_id} ?`, '确认移除', { type: 'warning' })
+  await poolApi.deleteMember(selectedPoolId.value, row.id)
+  ElMessage.success('成员已移除')
   await loadMembers()
 }
 
-async function onDeleteMember(row: poolApi.AccountPoolMember) {
-  if (!currentPoolID.value) return
-  await poolApi.deletePoolMember(currentPoolID.value, row.id)
-  ElMessage.success('成员已移出账号池')
-  await loadMembers()
-}
-
-const currentPool = computed(() => rows.value.find((x) => x.id === currentPoolID.value))
-const accountMap = computed(() => {
-  const map = new Map<number, accountApi.Account>()
-  for (const a of accounts.value) map.set(a.id, a)
-  return map
-})
-
-onMounted(async () => {
-  await Promise.all([loadAccounts(), loadPools()])
+onMounted(() => {
+  loadPools(false)
 })
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="card-block">
-      <div class="flex-between">
-        <div>
-          <h2 class="page-title">账号池管理</h2>
-          <div class="page-sub">管理账号池、池类型和池成员。Phase 1 先提供基础 CRUD 和成员绑定。</div>
-        </div>
-        <el-button v-if="canWrite" type="primary" @click="openCreatePool">新建账号池</el-button>
-      </div>
+  <div class="page-container" v-loading="loading">
+    <div class="page-title">账号池管理</div>
+    <div class="page-subtitle">
+      Phase 1 语义: <code>priority</code> 越小越优先,同优先级下 <code>weight</code> 越大越靠前;
+      <code>max_parallel</code> 当前仍受一号一锁限制。
     </div>
 
-    <div class="split-grid">
-      <div class="card-block">
-        <div class="section-title">账号池列表</div>
-        <el-table v-loading="loading" :data="rows" row-key="id" highlight-current-row @current-change="(row:any) => { currentPoolID = row?.id || 0; loadMembers() }">
-          <el-table-column prop="code" label="池编码" min-width="160" />
-          <el-table-column prop="name" label="名称" min-width="140" />
-          <el-table-column prop="pool_type" label="类型" width="100" />
-          <el-table-column label="启用" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column v-if="canWrite" label="操作" width="120">
-            <template #default="{ row }">
-              <el-button link size="small" type="primary" @click.stop="openEditPool(row)">编辑</el-button>
-              <el-button link size="small" type="danger" @click.stop="onDeletePool(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+    <el-row :gutter="16" class="pool-layout">
+      <el-col :xs="24" :lg="11">
+        <div class="card-block">
+          <div class="flex-between block-head">
+            <div>
+              <div class="section-title">账号池</div>
+              <div class="section-tip">用于承接图片请求的主池 / fallback 池</div>
+            </div>
+            <div class="flex-wrap-gap">
+              <el-button @click="loadPools()">刷新</el-button>
+              <el-button type="primary" @click="openCreatePool()">新建账号池</el-button>
+            </div>
+          </div>
 
-      <div class="card-block">
-        <div class="flex-between">
-          <div class="section-title">池成员{{ currentPool ? ` · ${currentPool.name}` : '' }}</div>
-          <el-button v-if="canWrite" :disabled="!currentPoolID" @click="openAddMember">加入账号</el-button>
+          <el-table :data="pools" @row-click="(row) => { selectedPoolId = row.id; loadMembers() }" row-key="id">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column prop="name" label="名称" min-width="140" />
+            <el-table-column prop="code" label="Code" min-width="140" />
+            <el-table-column prop="pool_type" label="类型" width="90" />
+            <el-table-column label="启用" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '是' : '否' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="150" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click.stop="openEditPool(row)">编辑</el-button>
+                <el-button link type="danger" @click.stop="removePool(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
-        <el-table :data="members" row-key="id">
-          <el-table-column label="账号" min-width="180">
-            <template #default="{ row }">
-              {{ accountMap.get(row.account_id)?.email || `#${row.account_id}` }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="weight" label="权重" width="80" />
-          <el-table-column prop="priority" label="优先级" width="90" />
-          <el-table-column prop="max_parallel" label="并发" width="80" />
-          <el-table-column label="启用" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="note" label="备注" min-width="120" />
-          <el-table-column v-if="canWrite" label="操作" width="80">
-            <template #default="{ row }">
-              <el-button link size="small" type="danger" @click="onDeleteMember(row)">移除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </div>
+      </el-col>
 
-    <el-dialog v-model="poolDlg" :title="editingPoolID ? '编辑账号池' : '新建账号池'" width="640px">
+      <el-col :xs="24" :lg="13">
+        <div class="card-block">
+          <div class="flex-between block-head">
+            <div>
+              <div class="section-title">
+                {{ selectedPool ? `成员列表 · ${selectedPool.name}` : '成员列表' }}
+              </div>
+              <div class="section-tip">成员开关只影响当前池,不会影响账号在其他池的可用性。</div>
+            </div>
+            <div class="flex-wrap-gap">
+              <el-button :disabled="!selectedPoolId" @click="loadMembers">刷新</el-button>
+              <el-button type="primary" :disabled="!selectedPoolId" @click="openCreateMember">添加成员</el-button>
+            </div>
+          </div>
+
+          <el-empty v-if="!selectedPoolId" description="请先在左侧选择一个账号池" />
+          <el-table v-else :data="members" row-key="id">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column prop="account_id" label="账号ID" width="100" />
+            <el-table-column label="启用" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '是' : '否' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="priority" label="Priority" width="100" />
+            <el-table-column prop="weight" label="Weight" width="90" />
+            <el-table-column prop="max_parallel" label="并发" width="80" />
+            <el-table-column prop="note" label="备注" min-width="160" show-overflow-tooltip />
+            <el-table-column label="操作" width="150" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openEditMember(row)">编辑</el-button>
+                <el-button link type="danger" @click="removeMember(row)">移除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-col>
+    </el-row>
+
+    <el-dialog v-model="poolDialog" :title="poolForm.id ? '编辑账号池' : '新建账号池'" width="560px">
       <el-form label-width="120px">
-        <el-form-item label="池编码"><el-input v-model="poolForm.code" :disabled="!!editingPoolID" /></el-form-item>
-        <el-form-item label="名称"><el-input v-model="poolForm.name" /></el-form-item>
+        <el-form-item label="Code">
+          <el-input v-model="poolForm.code" :disabled="poolForm.id > 0" placeholder="例如 image-main" />
+        </el-form-item>
+        <el-form-item label="名称">
+          <el-input v-model="poolForm.name" placeholder="例如 主图片池" />
+        </el-form-item>
         <el-form-item label="类型">
-          <el-select v-model="poolForm.pool_type" style="width: 180px">
-            <el-option label="mixed" value="mixed" />
-            <el-option label="chat" value="chat" />
+          <el-select v-model="poolForm.pool_type" style="width: 100%">
             <el-option label="image" value="image" />
-            <el-option label="codex" value="codex" />
+            <el-option label="mixed" value="mixed" />
           </el-select>
         </el-form-item>
-        <el-form-item label="调度策略"><el-input v-model="poolForm.dispatch_strategy" /></el-form-item>
-        <el-form-item label="粘性 TTL"><el-input-number v-model="poolForm.sticky_ttl_sec" :min="0" /></el-form-item>
-        <el-form-item label="描述"><el-input v-model="poolForm.description" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="启用"><el-switch v-model="poolForm.enabled" /></el-form-item>
+        <el-form-item label="调度策略">
+          <el-input v-model="poolForm.dispatch_strategy" placeholder="least_recently_used" />
+        </el-form-item>
+        <el-form-item label="Sticky TTL">
+          <el-input-number v-model="poolForm.sticky_ttl_sec" :min="0" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="poolForm.enabled" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="poolForm.description" type="textarea" :rows="3" />
+        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="poolDlg = false">取消</el-button>
-        <el-button type="primary" @click="submitPool">保存</el-button>
+        <el-button @click="poolDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingPool" @click="savePool">保存</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="memberDlg" title="加入账号池" width="560px">
+    <el-dialog v-model="memberDialog" :title="memberForm.id ? '编辑成员' : '添加成员'" width="560px">
       <el-form label-width="120px">
-        <el-form-item label="账号">
-          <el-select v-model="memberForm.account_id" filterable style="width: 100%">
-            <el-option v-for="a in accounts" :key="a.id" :label="a.email" :value="a.id" />
-          </el-select>
+        <el-form-item label="账号ID">
+          <el-input-number v-model="memberForm.account_id" :disabled="memberForm.id > 0" :min="1" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="权重"><el-input-number v-model="memberForm.weight" :min="1" /></el-form-item>
-        <el-form-item label="优先级"><el-input-number v-model="memberForm.priority" :min="1" /></el-form-item>
-        <el-form-item label="并发"><el-input-number v-model="memberForm.max_parallel" :min="1" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="memberForm.note" /></el-form-item>
-        <el-form-item label="启用"><el-switch v-model="memberForm.enabled" /></el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="memberForm.enabled" />
+        </el-form-item>
+        <el-form-item label="Priority">
+          <el-input-number v-model="memberForm.priority" :min="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="Weight">
+          <el-input-number v-model="memberForm.weight" :min="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="并发">
+          <el-input-number v-model="memberForm.max_parallel" :min="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="memberForm.note" type="textarea" :rows="3" />
+        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="memberDlg = false">取消</el-button>
-        <el-button type="primary" @click="submitMember">加入</el-button>
+        <el-button @click="memberDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingMember" @click="saveMember">保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
-<style scoped lang="scss">
-.split-grid {
-  display: grid;
-  grid-template-columns: 1.1fr 1fr;
-  gap: 16px;
+<style scoped>
+.page-subtitle {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  margin-bottom: 16px;
 }
-.section-title {
-  font-weight: 600;
+.pool-layout {
+  align-items: stretch;
+}
+.block-head {
   margin-bottom: 12px;
 }
-@media (max-width: 1100px) {
-  .split-grid {
-    grid-template-columns: 1fr;
-  }
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+.section-tip {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-top: 4px;
 }
 </style>

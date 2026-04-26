@@ -8,14 +8,11 @@ import {
   Lock,
   User,
   Connection,
-  Wallet,
-  Message as MailIcon,
 } from '@element-plus/icons-vue'
 import {
   listSettings,
   updateSettings,
   reloadSettings,
-  sendTestEmail,
   type SettingItem,
 } from '@/api/settings'
 import { useSiteStore } from '@/stores/site'
@@ -27,18 +24,16 @@ const items = ref<SettingItem[]>([])
 const draft = reactive<Record<string, string>>({})
 
 const tabs = [
-  { name: 'site', label: '通用设置', icon: Setting },
   { name: 'auth', label: '安全与认证', icon: Lock },
   { name: 'defaults', label: '用户默认值', icon: User },
   { name: 'gateway', label: '网关服务', icon: Connection },
-  { name: 'billing', label: '计费与充值', icon: Wallet },
-  { name: 'mail', label: '邮件设置', icon: MailIcon },
+  { name: 'site', label: '通用设置', icon: Setting },
 ] as const
-const activeTab = ref<(typeof tabs)[number]['name']>('site')
+const activeTab = ref<(typeof tabs)[number]['name']>('gateway')
 
 const grouped = computed(() => {
   const map: Record<string, SettingItem[]> = {
-    site: [], auth: [], defaults: [], gateway: [], billing: [], mail: [],
+    site: [], auth: [], defaults: [], gateway: [],
   }
   for (const it of items.value) {
     // 旧 category "limit" 归并到 defaults 显示
@@ -114,25 +109,6 @@ async function doReload() {
   } catch { /* 拦截器已处理 */ }
 }
 
-// ---- 邮件测试 ----
-const mailDlg = ref(false)
-const mailTo = ref('')
-const mailSending = ref(false)
-async function submitTestMail() {
-  if (!mailTo.value) {
-    ElMessage.warning('请输入收件邮箱')
-    return
-  }
-  mailSending.value = true
-  try {
-    await sendTestEmail(mailTo.value)
-    ElMessage.success('测试邮件已发出')
-    mailDlg.value = false
-  } catch { /* 拦截器已处理 */ } finally {
-    mailSending.value = false
-  }
-}
-
 onMounted(load)
 </script>
 
@@ -149,7 +125,6 @@ onMounted(load)
         </div>
         <div class="flex-wrap-gap">
           <el-button :icon="Refresh" @click="doReload">强制重载</el-button>
-          <el-button :icon="MailIcon" @click="mailDlg = true">发测试邮件</el-button>
           <el-button :disabled="dirtyCount === 0" @click="reset">重置</el-button>
           <el-button
             type="primary"
@@ -228,22 +203,6 @@ onMounted(load)
         </el-tab-pane>
       </el-tabs>
     </div>
-
-    <!-- 测试邮件 -->
-    <el-dialog v-model="mailDlg" title="发送 SMTP 测试邮件" width="420px">
-      <el-form label-width="80px">
-        <el-form-item label="收件人">
-          <el-input v-model="mailTo" placeholder="your@mail.com" type="email" clearable />
-        </el-form-item>
-        <div style="font-size:12px;color:var(--el-text-color-secondary)">
-          使用 <code>configs/config.yaml</code> 的 SMTP 配置发送;未配置时会直接失败。
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="mailDlg = false">取消</el-button>
-        <el-button type="primary" :loading="mailSending" @click="submitTestMail">发送</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

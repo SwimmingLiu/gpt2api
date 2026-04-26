@@ -9,6 +9,11 @@ import (
 
 var poolCodeRe = regexp.MustCompile(`^[a-z][a-z0-9\-]{1,63}$`)
 
+var (
+	ErrRouteNotConfigured = errors.New("accountpool: dispatch route not configured")
+	ErrPoolDisabled       = errors.New("accountpool: pool disabled")
+)
+
 type routeReader interface {
 	GetRouteByModelID(ctx context.Context, modelID uint64) (*ModelRoute, error)
 }
@@ -61,6 +66,63 @@ func (s *Service) ResolveModelRoute(ctx context.Context, modelID uint64) (Resolv
 		PoolID:         route.PoolID,
 		FallbackPoolID: route.FallbackPoolID,
 		LegacyGlobal:   false,
+	}, nil
+}
+
+// ResolveDispatchRoute 把模型路由与默认池配置折叠成运行时稳定契约。
+func (s *Service) ResolveDispatchRoute(
+	ctx context.Context,
+	modelID uint64,
+	defaultPoolID uint64,
+	defaultFallbackPoolID uint64,
+) (DispatchRoute, error) {
+	route, err := s.ResolveModelRoute(ctx, modelID)
+	if err != nil {
+		return DispatchRoute{}, err
+	}
+	if !route.LegacyGlobal && route.PoolID > 0 {
+		return DispatchRoute{
+			ModelID:        modelID,
+			PrimaryPoolID:  route.PoolID,
+			FallbackPoolID: route.FallbackPoolID,
+			AllowFallback:  route.FallbackPoolID > 0,
+			Source:         "model_route",
+		}, nil
+	}
+	if defaultPoolID > 0 {
+		return DispatchRoute{
+			ModelID:        modelID,
+			PrimaryPoolID:  defaultPoolID,
+			FallbackPoolID: defaultFallbackPoolID,
+			AllowFallback:  defaultFallbackPoolID > 0,
+			Source:         "default_pool",
+		}, nil
+	}
+	return DispatchRoute{}, ErrRouteNotConfigured
+}
+
+// ResolvePool 返回池开关 + 成员列表组成的运行时快照。
+func (s *Service) ResolvePool(ctx context.Context, poolID uint64) (ResolvedPool, error) {
+	if poolID == 0 {
+		return ResolvedPool{}, ErrNotFound
+	}
+	pool, err := s.store.GetPoolByID(ctx, poolID)
+	if err != nil {
+		return ResolvedPool{}, err
+	}
+	if pool == nil {
+		return ResolvedPool{}, ErrNotFound
+	}
+	if !pool.Enabled {
+		return ResolvedPool{}, ErrPoolDisabled
+	}
+	members, err := s.store.ListMembers(ctx, poolID)
+	if err != nil {
+		return ResolvedPool{}, err
+	}
+	return ResolvedPool{
+		Pool:    pool,
+		Members: members,
 	}, nil
 }
 
