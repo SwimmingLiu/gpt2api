@@ -280,7 +280,11 @@ async function submitForm() {
   try {
     if (!isEdit.value) {
       if (!form.auth_token) { ElMessage.warning('新建账号必须提供 access_token'); submitting.value = false; return }
-      await accountApi.createAccount({ ...form })
+      // 过期时间选填:空字符串不要带上,后端 time.Time 不接受 ""。
+      // 不传时后端会自动从 AT(JWT)里的 exp 字段解析。
+      const createBody: any = { ...form }
+      if (!createBody.token_expires_at) delete createBody.token_expires_at
+      await accountApi.createAccount(createBody)
       ElMessage.success('创建成功')
     } else {
       const body: any = {
@@ -422,6 +426,7 @@ async function onRefreshAll() {
       duration: 4000,
     })
     fetchList()
+    loadQuotaSummary()
   } catch (e: any) {
     ElMessage.error(e?.message || '刷新失败')
   } finally {
@@ -445,6 +450,7 @@ async function onProbeAll() {
       duration: 4000,
     })
     fetchList()
+    loadQuotaSummary()
   } catch (e: any) {
     ElMessage.error(e?.message || '探测失败')
   } finally {
@@ -708,11 +714,20 @@ async function handleImportSubmit(payload: DialogSubmitPayload) {
   }
 }
 
+// ========== 额度汇总 ==========
+const quotaSummary = ref<accountApi.QuotaSummary | null>(null)
+async function loadQuotaSummary() {
+  try {
+    quotaSummary.value = await accountApi.getQuotaSummary()
+  } catch { /* noop */ }
+}
+
 onMounted(() => {
   fetchList()
   fetchProxies()
   fetchPools()
   loadAutoRefresh()
+  loadQuotaSummary()
 })
 </script>
 
@@ -722,7 +737,15 @@ onMounted(() => {
     <div class="card-block hdr">
       <div class="flex-between">
         <div class="hdr-left">
-          <h2 class="page-title">GPT 账号池</h2>
+          <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+            <h2 class="page-title" style="margin:0">GPT 账号池</h2>
+            <el-tag v-if="quotaSummary" type="success" size="small" style="font-size:13px">
+              当前剩余总额度&nbsp;<b>{{ quotaSummary.total_remaining }}</b>
+              &nbsp;/&nbsp;{{ quotaSummary.total_capacity }}
+              &nbsp;（{{ quotaSummary.active_accounts }} 个账号）
+            </el-tag>
+            <el-tag v-else type="info" size="small">额度统计加载中…</el-tag>
+          </div>
           <div class="page-sub">
             统一管理 ChatGPT Plus / Team / Codex 账号:JSON / AT / RT / ST 批量导入 · 自动刷新 · 图片额度探测 · 风控熔断轮转
           </div>
@@ -861,7 +884,7 @@ onMounted(() => {
             <span v-else class="muted">未探测</span>
           </template>
         </el-table-column>
-        <el-table-column label="今日已用 / 上限" width="140" align="center">
+        <el-table-column label="今日已用 / 上限" width="150" align="center">
           <template #default="{ row }">
             <el-tooltip placement="top">
               <template #content>
@@ -872,13 +895,16 @@ onMounted(() => {
                       <template v-if="row.image_quota_total > 0">
                         {{ row.image_quota_total }}
                       </template>
-                      <template v-else>未探测</template>
+                      <template v-else>待探测</template>
                     </b>
                     <span v-if="row.image_quota_remaining >= 0" style="color:#a1a5ad">
                       (剩余 {{ row.image_quota_remaining }})
                     </span>
                   </div>
-                  <div>熔断上限(手工):{{ row.daily_image_quota }} / 日</div>
+                  <div style="color:#a1a5ad">熔断阈值(仅用于停止派发):{{ row.daily_image_quota }} / 日</div>
+                  <div v-if="row.image_quota_total <= 0" style="color:#f5a623">
+                    首次探测约 5 小时内完成;额度=0 时会忽略间隔立即补测。
+                  </div>
                 </div>
               </template>
               <span class="quota">
@@ -888,7 +914,7 @@ onMounted(() => {
                   <b>{{ row.image_quota_total }}</b>
                 </template>
                 <template v-else>
-                  <span class="muted">{{ row.daily_image_quota }}</span>
+                  <span class="muted" style="font-style:italic">待探测</span>
                 </template>
               </span>
             </el-tooltip>
@@ -1033,8 +1059,12 @@ onMounted(() => {
             <el-option label="Codex" value="codex" />
           </el-select>
         </el-form-item>
-        <el-form-item label="每日图片额度">
+        <el-form-item label="熔断阈值(每日)">
           <el-input-number v-model="form.daily_image_quota" :min="0" :max="10000" />
+          <div style="font-size:12px; color:#909399; margin-top:4px; line-height:1.5">
+            仅用于"消耗超过此值自动暂停派发"。真实图片上限由系统每 5 小时自动探测一次,
+            填 100 只是兜底熔断线,**不会**覆盖探测到的真实额度。
+          </div>
         </el-form-item>
         <el-form-item v-if="isEdit" label="状态">
           <el-select v-model="form.status" style="width: 180px">

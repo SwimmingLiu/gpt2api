@@ -35,9 +35,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/image"
 	"github.com/432539/gpt2api/internal/upstream/chatgpt"
 	"github.com/432539/gpt2api/pkg/logger"
 )
+
+// imageUpscaleCache 进程级单例 LRU,用于缓存「原图 → 4K/2K PNG」的放大结果。
+// 首次请求某张图的 4K 会花费一次 decode + Catmull-Rom + png encode(约 0.5~1.5s),
+// 之后同一条代理 URL 的请求毫秒级命中,不会重复计算。
+//
+// 放大不会写回 image_tasks / file system —— 所有放大字节都只存在于当前进程的
+// LRU 里,服务重启即销毁,保证磁盘占用为 0。
+var imageUpscaleCache = image.NewUpscaleCache(0, 0)
 
 // ImageAccountResolver 按账号 ID 解出构造 chatgpt client 所需的敏感字段。
 // 由 main.go 注入。接口里不直接依赖 account 包,保持本层解耦。
@@ -167,6 +176,20 @@ func (h *ImagesHandler) ImageProxy(c *gin.Context) {
 		return
 	}
 
+	// 按需放大:若 task 上打了 upscale 标记,先走进程内 LRU,命中则直接返回。
+	// 未命中再拉原图,放大成 PNG 后写入缓存。
+	scale := image.ValidateUpscale(t.Upscale)
+	cacheKey := ""
+	if scale != "" {
+		cacheKey = fmt.Sprintf("%s|%d|%s", taskID, idx, scale)
+		if data, ctCache, ok := imageUpscaleCache.Get(cacheKey); ok {
+			c.Header("Cache-Control", "private, max-age=3600")
+			c.Header("X-Upscale", scale+";cache=hit")
+			c.Data(http.StatusOK, ctCache, data)
+			return
+		}
+	}
+
 	body, ct, err := cli.FetchImage(ctx, signedURL, 16*1024*1024)
 	if err != nil {
 		logger.L().Warn("image proxy fetch",
@@ -177,6 +200,38 @@ func (h *ImagesHandler) ImageProxy(c *gin.Context) {
 	if ct == "" {
 		ct = "image/png"
 	}
+
+	if scale != "" {
+		// 并发闸:避免 4K 请求风暴把 CPU 打满影响生图主流程
+		imageUpscaleCache.Acquire()
+		upBytes, upCT, err := image.DoUpscale(body, scale)
+		imageUpscaleCache.Release()
+		if err != nil {
+			logger.L().Warn("image proxy upscale",
+				zap.Error(err), zap.String("task_id", taskID),
+				zap.String("scale", scale))
+			// 放大失败:回落到原图,不让用户看到白屏
+			c.Header("Cache-Control", "private, max-age=1800")
+			c.Header("X-Upscale", scale+";err")
+			c.Data(http.StatusOK, ct, body)
+			return
+		}
+		if upCT != "" {
+			ct = upCT
+		}
+		if len(upBytes) > 0 {
+			body = upBytes
+			imageUpscaleCache.Put(cacheKey, body, ct)
+			c.Header("X-Upscale", scale+";cache=miss")
+		} else {
+			// DoUpscale 也可能因"原图长边已足够大"而直接返回原字节
+			c.Header("X-Upscale", scale+";noop")
+		}
+		c.Header("Cache-Control", "private, max-age=3600")
+		c.Data(http.StatusOK, ct, body)
+		return
+	}
+
 	c.Header("Cache-Control", "private, max-age=1800")
 	c.Data(http.StatusOK, ct, body)
 }
