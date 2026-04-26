@@ -1,6 +1,6 @@
 # gpt2api
 
-> 面向 `gpt-image-2` 的图片账号池服务 —— 管理后台 / 代理池 / 账号池调度 / 图片代理下载。
+> 基于逆向 **chatgpt.com** 的 `gpt-image-2` 图片账号池网关 —— 管理后台 / 账号池 / 代理池 / 调度器 / 图片代理一体化。
 
 <p align="center">
   <a href="https://github.com/432539/gpt2api/stargazers"><img alt="stars" src="https://img.shields.io/github/stars/432539/gpt2api?style=flat-square"></a>
@@ -15,8 +15,43 @@
 
 ---
 
+## 当前分支冻结边界摘要
+
+> 当前仓库正在执行“图片账号池化精简改造”。本节以及 `docs/parallel-tasks/plans/01-image-only-admin-slimming-design.md`、`docs/parallel-tasks/plans/02-account-pool-runtime-gap-design.md`、`docs/parallel-tasks/plans/03-image-only-account-pool-refactor-plan.md` 是当前并行开发的权威边界；下文仍保留的 SaaS / 多租户表述仅代表历史实现背景，后续由总集成任务统一清理。
+
+- **对外只保留 3 个接口**
+  - `POST /v1/images/generations`
+  - `GET /v1/models`
+  - `GET /p/img/:task_id/:idx`
+- **后台只保留 5 类能力**
+  - 管理员登录
+  - 账号管理
+  - 代理管理
+  - 账号池 / 池路由管理
+  - 最小系统设置
+- **网关鉴权冻结为**
+  - 后台继续使用管理员 JWT
+  - `/v1/*` 使用实例级静态 Bearer Token
+  - 不再保留普通用户 API Key、配额、计费链路
+- **账号池 MVP 验收口径**
+  - 图片请求能命中主池
+  - 调度器只在池成员内选账号
+  - 主池无可用成员时 fallback 生效
+- **后续任务禁止重新初始化的模块**
+  - `internal/billing`
+  - `internal/recharge`
+  - `internal/audit`
+  - `internal/backup`
+  - `internal/usage`
+  - `internal/user`
+  - `internal/rbac`
+  - 文本聊天网关与普通用户自助链路
+
+---
+
 ## 目录
 
+- [当前分支冻结边界摘要](#当前分支冻结边界摘要)
 - [一、项目定位](#一项目定位)
 - [📸 界面预览](#-界面预览)
 - [二、核心特性](#二核心特性)
@@ -42,23 +77,26 @@
 
 ## 一、项目定位
 
-> **当前分支冻结后的共享契约**
->
-> - 对外仅保留 `POST /v1/images/generations`、`GET /v1/models`、`GET /p/img/:task_id/:idx`
-> - `/v1` 鉴权改为**实例级静态 Bearer Token**
-> - 管理后台仅保留：管理员登录、账号、代理、账号池、池路由、最小设置
-> - 图片请求主链路固定为：`gpt-image-2 -> DispatchRoute -> 主池/兜底池 -> 池成员调度 -> image runner`
-> - 不再初始化 SaaS 计费、充值、用户自助 API Key、Playground、审计、备份等运行时模块
-
-`gpt2api` 当前定位为一个**图片账号池服务**,把 `chatgpt.com` 账号的 `gpt-image-2` 能力通过最小 OpenAI 兼容接口暴露给下游调用方,并配套一个只面向管理员的后台。
+`gpt2api` 当前分支的目标,已经从“OpenAI 兼容 SaaS 网关”收缩为一个**仅服务 `gpt-image-2` 的图片账号池网关**。它对外只保留最小图片接口集,对内只保留管理员后台、账号治理、代理治理、账号池路由和最小系统设置。
 
 适合的场景:
 
-- 你手头有一批 ChatGPT Plus / Team / Codex 账号,需要一个稳定的 **`gpt-image-2` 账号池网关**;
-- 你希望把账号、代理、池路由和调度统一收敛在一个管理后台里;
-- 你更关心图片主链路稳定性,而不是多租户 SaaS 计费 / 用户运营。
+- 你手头有一批 ChatGPT Plus / Team / Codex 账号,想稳定提供 `gpt-image-2` 图片生成能力;
+- 你需要一个只面向管理员的账号池服务,集中管理账号、代理、池成员和调度策略;
+- 你希望后续围绕“图片账号池运行时”继续演进,而不是维持一套多租户 SaaS 运营系统。
 
-> 当前交付基线已经移除文本聊天、用户自助 API Key、充值计费、Playground、审计和备份等 SaaS 能力,只保留图片账号池 MVP。
+当前明确不再把以下能力视为本轮目标:
+
+- 普通用户注册 / 登录 / 自助控制台 / 接口文档
+- API Key、配额、计费、充值、账单
+- 文本聊天链路 `/v1/chat/completions`
+- 图生图 `/v1/images/edits` 与异步任务查询 `/v1/images/tasks/:id`
+
+边界冻结与后续实施分工见:
+
+- `docs/parallel-tasks/plans/01-image-only-admin-slimming-design.md`
+- `docs/parallel-tasks/plans/02-account-pool-runtime-gap-design.md`
+- `docs/parallel-tasks/plans/03-image-only-account-pool-refactor-plan.md`
 
 ---
 

@@ -2,6 +2,79 @@
 
 **日期**: 2026-04-26
 
+## 0. 共享契约摘要
+
+本节作为后续并行任务的**权威边界摘要**。若其他实现文档、旧 README、旧代码注释与本节冲突,以本节为准。
+
+### 0.1 最终保留面
+
+- **对外接口**
+  - `POST /v1/images/generations`
+  - `GET /v1/models`
+  - `GET /p/img/:task_id/:idx`
+- **后台能力**
+  - 管理员登录
+  - 账号管理
+  - 代理管理
+  - 账号池 / 池路由管理
+  - 最小系统设置
+- **核心运行时**
+  - `gpt-image-2` 图片生成主链路
+  - ChatGPT 上游逆向客户端
+  - 账号导入 / 编辑 / 刷新 / 额度探测
+  - 池内调度与图片代理下载
+
+### 0.2 最终移除面
+
+- **OpenAI 兼容接口**
+  - `POST /v1/chat/completions`
+  - `POST /v1/images/edits`
+  - `GET /v1/images/tasks/:id`
+- **后台 / 用户侧**
+  - `/api/auth/register`
+  - `/api/me/**`
+  - `/api/keys/**`
+  - `/api/recharge/**`
+  - `/api/admin/users/**`
+  - `/api/admin/credits/**`
+  - `/api/admin/groups/**`
+  - `/api/admin/usage/**`
+  - `/api/admin/recharge/**`
+  - `/api/admin/audit/**`
+  - `/api/admin/system/backup/**`
+  - `/api/admin/models/**`
+  - `/api/admin/account-import-sources/**`
+
+### 0.3 运行时硬约束
+
+- **鉴权模型**
+  - 后台只保留管理员 JWT 登录
+  - `/v1/*` 统一使用实例级静态 Bearer Token
+  - 不再保留“普通用户 -> API Key -> quota -> billing”链路
+- **必须保留的数据表**
+  - `oai_accounts`
+  - `oai_account_cookies`
+  - `account_proxy_bindings`
+  - `proxies`
+  - `account_pools`
+  - `account_pool_members`
+  - `model_pool_routes`
+  - `image_tasks`
+  - `system_settings`
+- **主入口必须停止初始化的模块**
+  - `internal/billing`
+  - `internal/recharge`
+  - `internal/audit`
+  - `internal/backup`
+  - `internal/usage`
+  - `internal/user`
+  - `internal/rbac`
+  - 文本聊天主链路
+  - 远程导入源管理（若本轮按建议移除）
+- **账号池 MVP 验收口径**
+  - 图片请求能命中主池
+  - 调度器只在池成员内选账号
+  - 主池无可用成员时 fallback 生效
 ## 1. 背景
 
 当前仓库的定位仍然是“OpenAI 兼容 SaaS 网关 + 运营后台”,而不是“面向单一模型的账号池服务”。
@@ -26,27 +99,6 @@
 因此需要对当前项目做一次明确的产品级收缩,避免后续账号池改造继续背着大量无关模块前进。
 
 ## 2. 目标
-
-### 2.0 冻结后的共享契约摘要
-
-- **保留对外接口**
-  - `POST /v1/images/generations`
-  - `GET /v1/models`
-  - `GET /p/img/:task_id/:idx`
-- **保留后台模块**
-  - 管理员登录
-  - 账号
-  - 代理
-  - 账号池
-  - 池路由
-  - 最小设置
-- **不得再初始化的运行时模块**
-  - 计费
-  - 充值
-  - 用户自助 API Key
-  - Playground / 个人中心
-  - 审计
-  - 备份
 
 ### 2.1 总目标
 

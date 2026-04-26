@@ -71,7 +71,6 @@
 - 主池无可用成员时,必须可切入 `fallback_pool_id`
 - 调度器不得再依赖“全局账号列表”作为图片主路径候选集
 - 导入时写入 `TargetPoolID` 的账号,必须可被新调度器直接看到
-
 ### 3.1 总目标
 
 在精简后的“图片账号池服务”里,把现有账号池补全成真正可用的运行时能力,让 `gpt-image-2` 请求可以:
@@ -126,6 +125,37 @@ MVP 建议先收敛到最简单的池路由规则:
 - 按系统级 API key 绑定池
 - 按业务来源做 sticky
 
+### 4.4 Phase 1 共享运行时契约
+
+为避免 Task 4 与 Task 5 在网关入口和调度语义上各自实现一套逻辑,本轮先冻结以下最小运行时契约:
+
+- **`DispatchRoute`**
+  - 表达一次图片请求的目标调度范围
+  - 最少包含:
+    - `ModelSlug`（固定为 `gpt-image-2`）
+    - `PrimaryPoolID`
+    - `FallbackPoolID`
+    - `AllowFallback`
+    - 预留 `StickyKey` / `StickyTTL` 扩展位
+- **`ResolvedPool`**
+  - 表达一次调度实际落到的池
+  - 最少包含:
+    - `PoolID`
+    - `Source`（`primary` 或 `fallback`）
+    - `MemberCandidates`
+    - `FallbackActivated`
+- **选择顺序**
+  - 先尝试 `primary`
+  - 仅当 `primary` 没有可调度成员时,才允许切到 `fallback`
+  - `fallback` 命中必须进入日志、后台或测试断言
+- **网关前提**
+  - 只需要接入 `POST /v1/images/generations`
+  - `/v1/models` 固定收缩为返回 `gpt-image-2`
+  - 网关鉴权由实例级静态 Bearer Token 提供,不再依赖用户 API Key
+- **Phase 1 明确保留但暂不启用**
+  - `sticky_ttl_sec`
+  - 更细粒度的 pool selection policy
+  - 基于系统级 token 的池路由扩展
 ## 5. 运行时缺口明细
 
 ### 5.1 网关层缺口
@@ -316,5 +346,8 @@ MVP 建议先收敛到最简单的池路由规则:
 
 - 本文解决的是**账号池还差什么**
 - 不是讨论“还要不要保留 SaaS 功能”
+- 若与 `01-image-only-admin-slimming-design.md` 存在冲突:
+  - **产品边界** 以 `01` 为准
+  - **池运行时语义** 以本文第 `4.4` 节与第 `8` 节为准
 
 前者是运行时能力问题,后者是产品边界问题,两者需要分开实施。

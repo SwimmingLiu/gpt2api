@@ -12,7 +12,7 @@
 
 ## 0. 执行原则
 
-### 0.3 共享契约摘要（后续实现统一引用）
+### 0.0 共享契约摘要（后续实现统一引用）
 
 - **最终保留的对外接口**
   - `POST /v1/images/generations`
@@ -45,6 +45,31 @@
 2. Task 2 / Task 3 / Task 4 可并行
 3. Task 5 在 Task 2 与 Task 4 基础上执行
 4. Task 6 最后执行
+
+### 0.3 冻结后的共享契约入口
+
+后续 agent 在动代码前,先统一引用以下冻结文档:
+
+- **产品边界与路由清单**
+  - `01-image-only-admin-slimming-design.md` 第 `0` 节与第 `6` 节
+- **账号池运行时契约与验收口径**
+  - `02-account-pool-runtime-gap-design.md` 第 `4.4` 节与第 `8` 节
+- **禁止重新初始化的模块**
+  - `internal/billing`
+  - `internal/recharge`
+  - `internal/audit`
+  - `internal/backup`
+  - `internal/usage`
+  - `internal/user`
+  - `internal/rbac`
+  - 文本聊天主链路
+- **固定保留的对外接口**
+  - `POST /v1/images/generations`
+  - `GET /v1/models`
+  - `GET /p/img/:task_id/:idx`
+- **固定鉴权模型**
+  - 后台管理员 JWT
+  - 网关静态 Bearer Token
 
 ---
 
