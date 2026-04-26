@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/billing"
 	"github.com/432539/gpt2api/internal/image"
@@ -205,6 +206,16 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 		_ = h.Billing.Refund(context.Background(), ak.UserID, ak.ID, cost, refID, "image refund")
 	}
 
+	route := accountpool.ResolvedRoute{LegacyGlobal: true}
+	if h.PoolSvc != nil {
+		route, err = h.PoolSvc.ResolveModelRoute(c.Request.Context(), m.ID)
+		if err != nil {
+			refund("pool_route_error")
+			openAIError(c, http.StatusInternalServerError, "internal_error", "账号池路由解析失败:"+err.Error())
+			return
+		}
+	}
+
 	// 4) 落任务
 	taskID := image.GenerateTaskID()
 	task := &image.Task{
@@ -247,15 +258,17 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 	}
 
 	res := h.Runner.Run(runCtx, image.RunOptions{
-		TaskID:        taskID,
-		UserID:        ak.UserID,
-		KeyID:         ak.ID,
-		ModelID:       m.ID,
-		UpstreamModel: m.UpstreamModelSlug,
-		Prompt:        maybeAppendClaritySuffix(req.Prompt),
-		N:             req.N,
-		MaxAttempts:   maxAttempts,
-		References:    refs,
+		TaskID:         taskID,
+		UserID:         ak.UserID,
+		KeyID:          ak.ID,
+		ModelID:        m.ID,
+		UpstreamModel:  m.UpstreamModelSlug,
+		Prompt:         maybeAppendClaritySuffix(req.Prompt),
+		N:              req.N,
+		MaxAttempts:    maxAttempts,
+		References:     refs,
+		PoolID:         route.PoolID,
+		FallbackPoolID: route.FallbackPoolID,
 	})
 	rec.AccountID = res.AccountID
 
@@ -349,14 +362,14 @@ func (h *ImagesHandler) ImageTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"task_id":          t.TaskID,
-		"status":           t.Status,
-		"conversation_id":  t.ConversationID,
-		"created":          t.CreatedAt.Unix(),
-		"finished_at":      nullableUnix(t.FinishedAt),
-		"error":            t.Error,
-		"credit_cost":      t.CreditCost,
-		"data":             data,
+		"task_id":         t.TaskID,
+		"status":          t.Status,
+		"conversation_id": t.ConversationID,
+		"created":         t.CreatedAt.Unix(),
+		"finished_at":     nullableUnix(t.FinishedAt),
+		"error":           t.Error,
+		"credit_cost":     t.CreditCost,
+		"data":            data,
 	})
 }
 
@@ -371,6 +384,18 @@ func (h *ImagesHandler) handleChatAsImage(c *gin.Context, rec *usage.Log, ak *ap
 	m *modelpkg.Model, req *ChatCompletionsRequest, startAt time.Time) {
 	rec.ModelID = m.ID
 	rec.Type = usage.TypeImage
+
+	route := accountpool.ResolvedRoute{LegacyGlobal: true}
+	var err error
+	if h.PoolSvc != nil {
+		route, err = h.PoolSvc.ResolveModelRoute(c.Request.Context(), m.ID)
+		if err != nil {
+			rec.Status = usage.StatusFailed
+			rec.ErrorCode = "pool_route_error"
+			openAIError(c, http.StatusInternalServerError, "internal_error", "账号池路由解析失败:"+err.Error())
+			return
+		}
+	}
 
 	prompt := extractLastUserPrompt(req.Messages)
 	if strings.TrimSpace(prompt) == "" {
@@ -450,14 +475,16 @@ func (h *ImagesHandler) handleChatAsImage(c *gin.Context, rec *usage.Log, ak *ap
 	defer cancel()
 
 	res := h.Runner.Run(runCtx, image.RunOptions{
-		TaskID:        taskID,
-		UserID:        ak.UserID,
-		KeyID:         ak.ID,
-		ModelID:       m.ID,
-		UpstreamModel: m.UpstreamModelSlug,
-		Prompt:        maybeAppendClaritySuffix(prompt),
-		N:             1,
-		MaxAttempts:   2,
+		TaskID:         taskID,
+		UserID:         ak.UserID,
+		KeyID:          ak.ID,
+		ModelID:        m.ID,
+		UpstreamModel:  m.UpstreamModelSlug,
+		Prompt:         maybeAppendClaritySuffix(prompt),
+		N:              1,
+		MaxAttempts:    2,
+		PoolID:         route.PoolID,
+		FallbackPoolID: route.FallbackPoolID,
 	})
 	rec.AccountID = res.AccountID
 
@@ -748,6 +775,16 @@ func (h *ImagesHandler) ImageEdits(c *gin.Context) {
 		_ = h.Billing.Refund(context.Background(), ak.UserID, ak.ID, cost, refID, "image-edit refund")
 	}
 
+	route := accountpool.ResolvedRoute{LegacyGlobal: true}
+	if h.PoolSvc != nil {
+		route, err = h.PoolSvc.ResolveModelRoute(c.Request.Context(), m.ID)
+		if err != nil {
+			refund("pool_route_error")
+			openAIError(c, http.StatusInternalServerError, "internal_error", "账号池路由解析失败:"+err.Error())
+			return
+		}
+	}
+
 	taskID := image.GenerateTaskID()
 	if h.DAO != nil {
 		_ = h.DAO.Create(c.Request.Context(), &image.Task{
@@ -767,15 +804,17 @@ func (h *ImagesHandler) ImageEdits(c *gin.Context) {
 	defer cancel()
 
 	res := h.Runner.Run(runCtx, image.RunOptions{
-		TaskID:        taskID,
-		UserID:        ak.UserID,
-		KeyID:         ak.ID,
-		ModelID:       m.ID,
-		UpstreamModel: m.UpstreamModelSlug,
-		Prompt:        maybeAppendClaritySuffix(prompt),
-		N:             n,
-		MaxAttempts:   1, // 带参考图时只跑一次,避免重复上传
-		References:    refs,
+		TaskID:         taskID,
+		UserID:         ak.UserID,
+		KeyID:          ak.ID,
+		ModelID:        m.ID,
+		UpstreamModel:  m.UpstreamModelSlug,
+		Prompt:         maybeAppendClaritySuffix(prompt),
+		N:              n,
+		MaxAttempts:    1, // 带参考图时只跑一次,避免重复上传
+		References:     refs,
+		PoolID:         route.PoolID,
+		FallbackPoolID: route.FallbackPoolID,
 	})
 	rec.AccountID = res.AccountID
 

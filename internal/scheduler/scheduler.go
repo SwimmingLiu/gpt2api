@@ -1,11 +1,11 @@
 // Package scheduler 负责 chatgpt.com 账号的并发安全调度。
 //
 // 核心规则(参考 RISK_AND_SAAS.md):
-//   1. 一号一锁:同账号同时只允许 1 个请求占用(Redis SETNX)。
-//   2. 最小间隔:同账号相邻请求 >= min_interval_sec。
-//   3. 每日配额:today_used_count < daily_image_quota * daily_usage_ratio。
-//   4. 状态机:healthy -> warned -> throttled -> suspicious -> dead,冷却过期自动恢复。
-//   5. 选择策略:status=healthy + cooldown 到期 + last_used_at 最早的优先。
+//  1. 一号一锁:同账号同时只允许 1 个请求占用(Redis SETNX)。
+//  2. 最小间隔:同账号相邻请求 >= min_interval_sec。
+//  3. 每日配额:today_used_count < daily_image_quota * daily_usage_ratio。
+//  4. 状态机:healthy -> warned -> throttled -> suspicious -> dead,冷却过期自动恢复。
+//  5. 选择策略:status=healthy + cooldown 到期 + last_used_at 最早的优先。
 package scheduler
 
 import (
@@ -59,6 +59,11 @@ type RuntimeParams struct {
 	WarnedPauseHrs  func() int
 	// QueueWaitSec 拿不到空闲账号时最长排队等待秒数,≤0 表示不排队(老语义)。
 	QueueWaitSec func() int
+}
+
+// DispatchOptions 控制一次调度的范围。
+type DispatchOptions struct {
+	PoolID uint64
 }
 
 // Scheduler 账号调度器。
@@ -144,7 +149,7 @@ func (s *Scheduler) queueWait() time.Duration {
 //   - 扫一遍所有 candidate 都被锁住 / 不满足 min_interval / 日配额时,
 //     不立即返回失败,而是按指数退避轮询重试,直到拿到锁或超过 queueWait。
 //   - queueWait=0 时退化为老语义(扫一次,失败即返回 ErrNoAvailable)。
-func (s *Scheduler) Dispatch(ctx context.Context, modelType string) (*Lease, error) {
+func (s *Scheduler) Dispatch(ctx context.Context, modelType string, opt DispatchOptions) (*Lease, error) {
 	deadline := time.Now().Add(s.queueWait())
 
 	const (
@@ -158,7 +163,7 @@ func (s *Scheduler) Dispatch(ctx context.Context, modelType string) (*Lease, err
 
 	for {
 		attempt++
-		lease, err := s.tryDispatchOnce(ctx, modelType)
+		lease, err := s.tryDispatchOnce(ctx, modelType, opt)
 		if err == nil {
 			if attempt > 1 {
 				logger.L().Info("scheduler queued dispatch ok",
@@ -198,10 +203,16 @@ func (s *Scheduler) Dispatch(ctx context.Context, modelType string) (*Lease, err
 
 // tryDispatchOnce 扫一遍 candidate,尝试为其中一个加锁;
 // 全部 candidate 都被锁 / 不满足 min_interval / 日配额时返回 ErrNoAvailable。
-func (s *Scheduler) tryDispatchOnce(ctx context.Context, modelType string) (*Lease, error) {
+func (s *Scheduler) tryDispatchOnce(ctx context.Context, modelType string, opt DispatchOptions) (*Lease, error) {
 	limit := 30
 	dao := s.accSvc.DAO()
-	candidates, err := dao.ListDispatchable(ctx, limit)
+	var candidates []*account.Account
+	var err error
+	if opt.PoolID > 0 {
+		candidates, err = dao.ListDispatchableByPool(ctx, opt.PoolID, limit)
+	} else {
+		candidates, err = dao.ListDispatchable(ctx, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("scheduler list: %w", err)
 	}
@@ -238,6 +249,19 @@ func (s *Scheduler) tryDispatchOnce(ctx context.Context, modelType string) (*Lea
 			zap.Uint64("account_id", acc.ID), zap.Error(err))
 	}
 	return nil, ErrNoAvailable
+}
+
+func filterByAllowedAccounts(candidates []*account.Account, allowed map[uint64]struct{}) []*account.Account {
+	if len(allowed) == 0 {
+		return candidates
+	}
+	out := make([]*account.Account, 0, len(candidates))
+	for _, acc := range candidates {
+		if _, ok := allowed[acc.ID]; ok {
+			out = append(out, acc)
+		}
+	}
+	return out
 }
 
 func (s *Scheduler) tryLock(ctx context.Context, acc *account.Account) (*Lease, error) {

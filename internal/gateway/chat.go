@@ -1,12 +1,12 @@
 // Package gateway 实现 OpenAI 兼容的 /v1/* 入口。
 //
 // 职责:
-//   1. 鉴权(API Key,IP/模型白名单)
-//   2. 查模型 → 预扣积分
-//   3. 通过调度器拿账号 Lease
-//   4. 转译请求体 → 调用 chatgpt.com 上游
-//   5. 转译响应(流式 or 聚合) → OpenAI 协议
-//   6. 结算(真实 tokens) / 失败退款 / 释放账号锁 / 更新风控状态
+//  1. 鉴权(API Key,IP/模型白名单)
+//  2. 查模型 → 预扣积分
+//  3. 通过调度器拿账号 Lease
+//  4. 转译请求体 → 调用 chatgpt.com 上游
+//  5. 转译响应(流式 or 聚合) → OpenAI 协议
+//  6. 结算(真实 tokens) / 失败退款 / 释放账号锁 / 更新风控状态
 package gateway
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/apikey"
 	"github.com/432539/gpt2api/internal/billing"
 	modelpkg "github.com/432539/gpt2api/internal/model"
@@ -45,6 +46,9 @@ type Handler struct {
 	Usage     *usage.Logger
 	AccSvc    interface {
 		DecryptCookies(ctx context.Context, accountID uint64) (string, error)
+	}
+	PoolSvc interface {
+		ResolveModelRoute(ctx context.Context, modelID uint64) (accountpool.ResolvedRoute, error)
 	}
 	// Images 可选:若挂载,chat/completions 里指定图像模型会自动转派。
 	Images *ImagesHandler
@@ -229,7 +233,23 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 
 	// 4) 调度账号
-	lease, err := h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat)
+	route := accountpool.ResolvedRoute{LegacyGlobal: true}
+	if h.PoolSvc != nil {
+		route, err = h.PoolSvc.ResolveModelRoute(c.Request.Context(), m.ID)
+		if err != nil {
+			refund("pool_route_error")
+			openAIError(c, http.StatusInternalServerError, "internal_error", "账号池路由解析失败:"+err.Error())
+			return
+		}
+	}
+	lease, err := h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat, scheduler.DispatchOptions{
+		PoolID: route.PoolID,
+	})
+	if err != nil && errors.Is(err, scheduler.ErrNoAvailable) && route.FallbackPoolID > 0 {
+		lease, err = h.Scheduler.Dispatch(c.Request.Context(), modelpkg.TypeChat, scheduler.DispatchOptions{
+			PoolID: route.FallbackPoolID,
+		})
+	}
 	if err != nil {
 		refund("no_account_available")
 		openAIError(c, http.StatusServiceUnavailable, "no_account_available", "账号池暂无可用账号,请稍后重试")

@@ -91,6 +91,7 @@ func (h *Handler) Create(c *gin.Context) {
 	var req struct {
 		CreateInput
 		TargetPoolID    uint64 `json:"target_pool_id"`
+		DefaultPoolID   uint64 `json:"default_pool_id"`
 		ResolveIdentity *bool  `json:"resolve_identity"`
 		KickRefresh     *bool  `json:"kick_refresh"`
 		KickQuotaProbe  *bool  `json:"kick_quota_probe"`
@@ -122,6 +123,9 @@ func (h *Handler) Create(c *gin.Context) {
 	})
 	if len(candidates) == 1 && candidates[0].PlanType == "" {
 		candidates[0].PlanType = "plus"
+	}
+	if req.TargetPoolID == 0 {
+		req.TargetPoolID = req.DefaultPoolID
 	}
 
 	result, err := h.getImportCore().Import(c.Request.Context(), candidates, importcore.ImportOptions{
@@ -165,7 +169,11 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	status := c.Query("status")
 	keyword := c.Query("keyword")
-	list, total, err := h.svc.List(c.Request.Context(), status, keyword, (page-1)*size, size)
+	var poolID uint64
+	if v := strings.TrimSpace(c.Query("pool_id")); v != "" {
+		poolID, _ = strconv.ParseUint(v, 10, 64)
+	}
+	list, total, err := h.svc.List(c.Request.Context(), status, keyword, poolID, (page-1)*size, size)
 	if err != nil {
 		resp.Internal(c, err.Error())
 		return
@@ -347,6 +355,7 @@ func (h *Handler) Import(c *gin.Context) {
 		DefaultClientID string `json:"default_client_id"`
 		DefaultProxyID  uint64 `json:"default_proxy_id"`
 		TargetPoolID    uint64 `json:"target_pool_id"`
+		DefaultPoolID   uint64 `json:"default_pool_id"`
 		ResolveIdentity *bool  `json:"resolve_identity"`
 		KickRefresh     *bool  `json:"kick_refresh"`
 		KickQuotaProbe  *bool  `json:"kick_quota_probe"`
@@ -374,6 +383,13 @@ func (h *Handler) Import(c *gin.Context) {
 		if v := c.PostForm("target_pool_id"); v != "" {
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				req.TargetPoolID = n
+			}
+		}
+		if req.TargetPoolID == 0 {
+			if v := c.PostForm("default_pool_id"); v != "" {
+				if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+					req.DefaultPoolID = n
+				}
 			}
 		}
 		if v := c.PostForm("resolve_identity"); v != "" {
@@ -424,6 +440,9 @@ func (h *Handler) Import(c *gin.Context) {
 	if req.UpdateExisting != nil {
 		upd = *req.UpdateExisting
 	}
+	if req.TargetPoolID == 0 {
+		req.TargetPoolID = req.DefaultPoolID
+	}
 
 	for i := range candidates {
 		if candidates[i].ClientID == "" {
@@ -469,6 +488,7 @@ func (h *Handler) ImportTokens(c *gin.Context) {
 		UpdateExisting  *bool           `json:"update_existing"`
 		DefaultProxyID  uint64          `json:"default_proxy_id"`
 		TargetPoolID    uint64          `json:"target_pool_id"`
+		DefaultPoolID   uint64          `json:"default_pool_id"`
 		ResolveIdentity *bool           `json:"resolve_identity"`
 		KickRefresh     *bool           `json:"kick_refresh"`
 		KickQuotaProbe  *bool           `json:"kick_quota_probe"`
@@ -511,6 +531,9 @@ func (h *Handler) ImportTokens(c *gin.Context) {
 	upd := true
 	if req.UpdateExisting != nil {
 		upd = *req.UpdateExisting
+	}
+	if req.TargetPoolID == 0 {
+		req.TargetPoolID = req.DefaultPoolID
 	}
 
 	var proxyURL string

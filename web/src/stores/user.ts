@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import * as authApi from '@/api/auth'
-import { TOKEN_KEY, REFRESH_KEY } from '@/api/http'
+import { TOKEN_KEY, REFRESH_KEY, safeRemoveStorage, safeSetStorage } from '@/api/http'
 
 export const useUserStore = defineStore(
   'user',
   () => {
-    const accessToken = ref<string>(localStorage.getItem(TOKEN_KEY) || '')
-    const refreshToken = ref<string>(localStorage.getItem(REFRESH_KEY) || '')
+    const mockMode = import.meta.env.VITE_DEV_MOCK === '1'
+    const accessToken = ref<string>(mockMode ? '' : (localStorage.getItem(TOKEN_KEY) || ''))
+    const refreshToken = ref<string>(mockMode ? '' : (localStorage.getItem(REFRESH_KEY) || ''))
     const user = ref<authApi.UserInfo | null>(null)
     const permissions = ref<string[]>([])
     const role = ref<string>('')
@@ -19,8 +20,8 @@ export const useUserStore = defineStore(
     function setTokens(tp: authApi.TokenPair) {
       accessToken.value = tp.access_token
       refreshToken.value = tp.refresh_token
-      localStorage.setItem(TOKEN_KEY, tp.access_token)
-      localStorage.setItem(REFRESH_KEY, tp.refresh_token)
+      safeSetStorage(TOKEN_KEY, tp.access_token)
+      safeSetStorage(REFRESH_KEY, tp.refresh_token)
     }
 
     async function login(email: string, password: string) {
@@ -63,8 +64,8 @@ export const useUserStore = defineStore(
       permissions.value = []
       role.value = ''
       menu.value = []
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(REFRESH_KEY)
+      safeRemoveStorage(TOKEN_KEY)
+      safeRemoveStorage(REFRESH_KEY)
     }
 
     async function logout() {
@@ -92,7 +93,7 @@ export const useUserStore = defineStore(
   },
   {
     // 持久化 token 和 user,避免刷新后闪屏
-    persist: {
+    persist: import.meta.env.VITE_DEV_MOCK === '1' ? false : {
       key: 'gpt2api.user-store',
       paths: ['accessToken', 'refreshToken', 'user', 'role', 'permissions'],
     },

@@ -105,6 +105,12 @@ func main() {
 	poolDAO := accountpool.NewDAO(sqldb)
 	poolSvc := accountpool.NewService(poolDAO)
 	poolH := accountpool.NewHTTPHandler(poolSvc)
+	accSvc.SetPoolBinder(func(ctx context.Context, poolID, accountID uint64) error {
+		_, err := poolSvc.UpsertMember(ctx, poolID, 0, accountpool.UpsertMemberInput{
+			AccountID: accountID,
+		})
+		return err
+	})
 
 	keyDAO := apikey.NewDAO(sqldb)
 	keySvc := apikey.NewService(keyDAO)
