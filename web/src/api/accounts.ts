@@ -65,6 +65,10 @@ export interface AccountCreate {
   notes?: string
   cookies?: string
   proxy_id?: number
+  target_pool_id?: number
+  update_existing?: boolean
+  kick_refresh?: boolean
+  kick_quota_probe?: boolean
 }
 export interface AccountUpdate extends Partial<AccountCreate> {
   status?: string
@@ -89,9 +93,12 @@ export function unbindProxy(id: number) {
 // ---------- 批量导入 ----------
 export interface ImportLineResult {
   index: number
+  source_type?: string
+  source_ref?: string
   email: string
   status: 'created' | 'updated' | 'skipped' | 'failed'
   reason?: string
+  warnings?: string[]
   id?: number
 }
 export interface ImportSummary {
@@ -112,12 +119,19 @@ export interface ImportSummary {
  * 大量文件(>500 个)建议前端在客户端先分批合并 text 再用 json 发送,
  * 避免一次 multipart 过大。
  */
-export function importAccountsJSON(body: {
+export interface ImportAccountsJSONBody {
   text: string
+  source_kind?: 'auto' | 'cpa_file' | 'sub2api_json' | 'token_file'
   update_existing?: boolean
   default_client_id?: string
   default_proxy_id?: number
-}) {
+  target_pool_id?: number
+  resolve_identity?: boolean
+  kick_refresh?: boolean
+  kick_quota_probe?: boolean
+}
+
+export function importAccountsJSON(body: ImportAccountsJSONBody) {
   return http.post<any, ImportSummary>('/api/admin/accounts/import', body)
 }
 
@@ -131,21 +145,32 @@ export interface ImportTokensBody {
   update_existing?: boolean
   /** RT/ST 换 AT 时走的代理(chatgpt.com / auth.openai.com),强烈推荐 */
   default_proxy_id?: number
+  target_pool_id?: number
+  resolve_identity?: boolean
+  kick_refresh?: boolean
+  kick_quota_probe?: boolean
 }
 
 export function importAccountsTokens(body: ImportTokensBody) {
   return http.post<any, ImportSummary>('/api/admin/accounts/import-tokens', body)
 }
 
+export interface ImportAccountsFilesOptions extends Omit<ImportAccountsJSONBody, 'text'> {}
+
 export function importAccountsFiles(
   files: File[],
-  opt: { update_existing?: boolean; default_client_id?: string; default_proxy_id?: number } = {}
+  opt: ImportAccountsFilesOptions = {}
 ) {
   const fd = new FormData()
   for (const f of files) fd.append('files', f, f.name)
+  if (opt.source_kind) fd.append('source_kind', opt.source_kind)
   if (opt.update_existing !== undefined) fd.append('update_existing', String(opt.update_existing))
   if (opt.default_client_id) fd.append('default_client_id', opt.default_client_id)
   if (opt.default_proxy_id) fd.append('default_proxy_id', String(opt.default_proxy_id))
+  if (opt.target_pool_id) fd.append('target_pool_id', String(opt.target_pool_id))
+  if (opt.resolve_identity !== undefined) fd.append('resolve_identity', String(opt.resolve_identity))
+  if (opt.kick_refresh !== undefined) fd.append('kick_refresh', String(opt.kick_refresh))
+  if (opt.kick_quota_probe !== undefined) fd.append('kick_quota_probe', String(opt.kick_quota_probe))
   return http.post<any, ImportSummary>('/api/admin/accounts/import', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })

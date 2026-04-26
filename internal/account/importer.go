@@ -2,12 +2,11 @@ package account
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"strings"
 	"time"
+
+	"github.com/432539/gpt2api/internal/account/importcore"
+	"github.com/432539/gpt2api/internal/account/importsource"
 )
 
 // ImportSource 代表一条待导入记录,来自任意一种 JSON 格式。
@@ -64,238 +63,36 @@ type ImportOptions struct {
 //  3. 顶层是数组,每个元素同 (1)/(2) 的单个对象
 //  4. 多个 JSON 文本用换行/空行分隔(JSONL)
 func ParseJSONBlob(raw string) ([]ImportSource, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("输入为空")
+	candidates, err := parseCandidatesFromJSON([]byte(raw))
+	if err != nil {
+		return nil, err
 	}
-	// 先尝试整体解析
-	if xs, err := parseSingleJSON(raw); err == nil && len(xs) > 0 {
-		return xs, nil
+	out := make([]ImportSource, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, importSourceFromCandidate(candidate))
 	}
-	// 再尝试 JSONL
-	var all []ImportSource
-	var firstErr error
-	dec := json.NewDecoder(strings.NewReader(raw))
-	for {
-		var one json.RawMessage
-		if err := dec.Decode(&one); err != nil {
-			if err == io.EOF {
-				break
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-			break
-		}
-		xs, err := parseSingleJSON(string(one))
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		all = append(all, xs...)
-	}
-	if len(all) == 0 {
-		if firstErr == nil {
-			firstErr = errors.New("无法识别的 JSON 格式")
-		}
-		return nil, firstErr
-	}
-	return all, nil
+	return out, nil
 }
 
-func parseSingleJSON(s string) ([]ImportSource, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, errors.New("空 JSON")
-	}
-	// 1) 数组
-	if s[0] == '[' {
-		var arr []json.RawMessage
-		if err := json.Unmarshal([]byte(s), &arr); err != nil {
-			return nil, fmt.Errorf("解析 JSON 数组失败:%w", err)
-		}
-		var all []ImportSource
-		for _, item := range arr {
-			xs, err := parseSingleJSON(string(item))
-			if err != nil {
-				continue
-			}
-			all = append(all, xs...)
-		}
-		return all, nil
-	}
-	// 2) 对象
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(s), &obj); err != nil {
-		return nil, fmt.Errorf("解析 JSON 对象失败:%w", err)
-	}
-
-	// Format A: 有 accounts 数组
-	if v, ok := obj["accounts"]; ok {
-		var accs []subAPIAccount
-		if err := json.Unmarshal(v, &accs); err == nil {
-			out := make([]ImportSource, 0, len(accs))
-			for _, a := range accs {
-				src, ok := a.toSource()
-				if ok {
-					out = append(out, src)
-				}
-			}
-			return out, nil
-		}
-	}
-
-	// Format B: 单账号 token_xxx.json(扁平对象)
-	if _, has := obj["access_token"]; has {
-		var b tokenFileB
-		if err := json.Unmarshal([]byte(s), &b); err != nil {
-			return nil, fmt.Errorf("解析 token 文件失败:%w", err)
-		}
-		src, ok := b.toSource()
-		if !ok {
-			return nil, errors.New("token 文件缺少必要字段")
-		}
-		return []ImportSource{src}, nil
-	}
-	// 兼容 accessToken(驼峰)
-	if _, has := obj["accessToken"]; has {
-		var b tokenFileB
-		// 同名 camelCase 字段也走 tokenFileB;json tag 都用 snake_case
-		// 这里用一个临时结构
-		var camel struct {
-			AccessToken  string `json:"accessToken"`
-			RefreshToken string `json:"refreshToken"`
-			Email        string `json:"email"`
-			AccountID    string `json:"account_id"`
-			Type         string `json:"type"`
-			ClientID     string `json:"client_id"`
-			Expired      string `json:"expires"`
-		}
-		if err := json.Unmarshal([]byte(s), &camel); err != nil {
-			return nil, err
-		}
-		b.AccessToken = camel.AccessToken
-		b.RefreshToken = camel.RefreshToken
-		b.Email = camel.Email
-		b.AccountID = camel.AccountID
-		b.Type = camel.Type
-		b.ClientID = camel.ClientID
-		b.Expired = camel.Expired
-		src, ok := b.toSource()
-		if !ok {
-			return nil, errors.New("token 文件缺少必要字段")
-		}
-		return []ImportSource{src}, nil
-	}
-
-	return nil, errors.New("未识别的 JSON 结构(既不是 sub2api 也不是 token 文件)")
+func parseCandidatesFromJSON(raw []byte) ([]importcore.ImportCandidate, error) {
+	return importsource.ParseAutoJSON(raw)
 }
 
-// sub2api 的 account 结构片段。
-type subAPIAccount struct {
-	Name        string `json:"name"`
-	Platform    string `json:"platform"`
-	Type        string `json:"type"`
-	Credentials struct {
-		AccessToken      string `json:"access_token"`
-		RefreshToken     string `json:"refresh_token"`
-		SessionToken     string `json:"session_token"`
-		ClientID         string `json:"client_id"`
-		ChatGPTAccountID string `json:"chatgpt_account_id"`
-	} `json:"credentials"`
-	Extra struct {
-		Email string `json:"email"`
-	} `json:"extra"`
-}
-
-func (a subAPIAccount) toSource() (ImportSource, bool) {
-	src := ImportSource{
-		AccessToken:      a.Credentials.AccessToken,
-		RefreshToken:     a.Credentials.RefreshToken,
-		SessionToken:     a.Credentials.SessionToken,
-		ClientID:         a.Credentials.ClientID,
-		ChatGPTAccountID: a.Credentials.ChatGPTAccountID,
-		AccountType:      normalizeType(a.Name, a.Platform),
-		Email:            strings.TrimSpace(a.Extra.Email),
-		Name:             a.Name,
+func importSourceFromCandidate(candidate importcore.ImportCandidate) ImportSource {
+	var expiredAt time.Time
+	if candidate.TokenExpiresAt != nil {
+		expiredAt = candidate.TokenExpiresAt.UTC()
 	}
-	if src.Email == "" {
-		src.Email = emailFromName(a.Name)
-	}
-	if src.AccessToken == "" || src.Email == "" {
-		return src, false
-	}
-	return src, true
-}
-
-// tokenFileB 对应 token_xxx.json。
-type tokenFileB struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	IDToken      string `json:"id_token"`
-	AccountID    string `json:"account_id"`
-	Email        string `json:"email"`
-	Type         string `json:"type"`
-	ClientID     string `json:"client_id"`
-	Expired      string `json:"expired"`
-}
-
-func (b tokenFileB) toSource() (ImportSource, bool) {
-	src := ImportSource{
-		AccessToken:      b.AccessToken,
-		RefreshToken:     b.RefreshToken,
-		Email:            strings.TrimSpace(b.Email),
-		ChatGPTAccountID: b.AccountID,
-		ClientID:         b.ClientID,
-		AccountType:      strings.ToLower(strings.TrimSpace(b.Type)),
-	}
-	if src.AccountType == "" {
-		src.AccountType = "codex"
-	}
-	if b.Expired != "" {
-		if t, err := time.Parse(time.RFC3339, b.Expired); err == nil {
-			src.ExpiredAt = t
-		}
-	}
-	if src.AccessToken == "" || src.Email == "" {
-		return src, false
-	}
-	return src, true
-}
-
-// emailFromName 把 sub2api 的 name (codex-user_hotmail.com) 反推成 email。
-func emailFromName(name string) string {
-	if name == "" {
-		return ""
-	}
-	n := name
-	for _, prefix := range []string{"codex-", "chatgpt-", "openai-"} {
-		if strings.HasPrefix(n, prefix) {
-			n = strings.TrimPrefix(n, prefix)
-			break
-		}
-	}
-	// 最后一个 _ 之前视为 localpart,之后视为 domain
-	idx := strings.LastIndex(n, "_")
-	if idx > 0 && idx < len(n)-1 {
-		return n[:idx] + "@" + n[idx+1:]
-	}
-	return ""
-}
-
-func normalizeType(name, platform string) string {
-	lower := strings.ToLower(name + " " + platform)
-	switch {
-	case strings.Contains(lower, "codex"):
-		return "codex"
-	case strings.Contains(lower, "chatgpt"):
-		return "chatgpt"
-	case strings.Contains(lower, "openai"):
-		return "codex"
-	default:
-		return "codex"
+	return ImportSource{
+		AccessToken:      candidate.AccessToken,
+		Email:            candidate.Email,
+		RefreshToken:     candidate.RefreshToken,
+		SessionToken:     candidate.SessionToken,
+		ClientID:         candidate.ClientID,
+		ChatGPTAccountID: candidate.ChatGPTAccountID,
+		AccountType:      candidate.AccountType,
+		ExpiredAt:        expiredAt,
+		Name:             candidate.Notes,
 	}
 }
 

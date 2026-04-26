@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/432539/gpt2api/internal/account/importcore"
 )
 
 // ImportTokenMode 批量 token 导入的模式。
@@ -54,6 +56,21 @@ type ImportTokensOptions struct {
 //  4. 拿到 email + AT 的行 → 复用现有 ImportBatch 走 upsert。
 //  5. 无法拿到 email 的行进 failed 明细,返回给前端。
 func (s *Service) ImportTokensBatch(ctx context.Context, tokens []string, opts ImportTokensOptions) *ImportSummary {
+	candidates, summary := buildImportTokenCandidates(ctx, tokens, opts)
+	items := make([]ImportSource, 0, len(candidates))
+	for _, candidate := range candidates {
+		items = append(items, importSourceFromCandidate(candidate))
+	}
+	batch := s.ImportBatch(ctx, items, ImportOptions{
+		UpdateExisting:  opts.UpdateExisting,
+		DefaultClientID: strings.TrimSpace(opts.ClientID),
+		DefaultProxyID:  opts.DefaultProxyID,
+		BatchSize:       opts.BatchSize,
+	})
+	return legacyImportSummary(mergeLegacyBatchIntoImportSummary(summary, batch))
+}
+
+func buildImportTokenCandidates(ctx context.Context, tokens []string, opts ImportTokensOptions) ([]importcore.ImportCandidate, *importSummaryResponse) {
 	if opts.Mode == "" {
 		opts.Mode = ImportModeAT
 	}
@@ -84,8 +101,8 @@ func (s *Service) ImportTokensBatch(ctx context.Context, tokens []string, opts I
 		cleaned = append(cleaned, t)
 	}
 
-	sum := &ImportSummary{Results: make([]ImportLineResult, 0, len(cleaned))}
-	items := make([]ImportSource, 0, len(cleaned))
+	sum := newImportSummaryResponse()
+	candidates := make([]importcore.ImportCandidate, 0, len(cleaned))
 
 	// RT 模式先强制校验 client_id
 	clientID := strings.TrimSpace(opts.ClientID)
@@ -98,68 +115,54 @@ func (s *Service) ImportTokensBatch(ctx context.Context, tokens []string, opts I
 			break
 		}
 
-		var src ImportSource
+		var src importcore.ImportCandidate
 		var err error
 		switch opts.Mode {
 		case ImportModeAT:
-			src, err = convertATToSource(t, clientID)
+			src, err = convertATToCandidate(t, clientID, idx)
 		case ImportModeRT:
 			if clientID == "" {
 				err = errors.New("RT 模式需要 APPID(client_id)")
 				break
 			}
-			src, err = convertRTToSource(ctx, httpc, t, clientID)
+			src, err = convertRTToCandidate(ctx, httpc, t, clientID, idx)
 		case ImportModeST:
-			src, err = convertSTToSource(ctx, httpc, t, clientID)
+			src, err = convertSTToCandidate(ctx, httpc, t, clientID, idx)
 		default:
 			err = fmt.Errorf("未知模式:%s", opts.Mode)
 		}
 		if err != nil {
-			sum.Failed++
-			sum.Total++
-			sum.Results = append(sum.Results, ImportLineResult{
-				Index:  idx,
-				Email:  "?",
-				Status: "failed",
-				Reason: truncate(err.Error(), 160),
+			sum = appendImportSummaryRow(sum, importSummaryResultRow{
+				Email:      "?",
+				Status:     "failed",
+				Reason:     truncate(err.Error(), 160),
+				SourceType: importTokenSourceType(opts.Mode),
+				SourceRef:  fmt.Sprintf("line:%d", idx+1),
 			})
 			continue
 		}
-		items = append(items, src)
+		candidates = append(candidates, src)
 	}
-
-	// 复用已有批量 upsert(去重、分批、UpdateExisting 等都在里面)
-	batch := s.ImportBatch(ctx, items, ImportOptions{
-		UpdateExisting:  opts.UpdateExisting,
-		DefaultClientID: clientID,
-		DefaultProxyID:  opts.DefaultProxyID,
-		BatchSize:       opts.BatchSize,
-	})
-	sum.Total += batch.Total
-	sum.Created += batch.Created
-	sum.Updated += batch.Updated
-	sum.Skipped += batch.Skipped
-	sum.Failed += batch.Failed
-	sum.Results = append(sum.Results, batch.Results...)
-	return sum
+	return candidates, sum
 }
 
 // ---------- 三种模式的 token → ImportSource 转换 ----------
 
-// convertATToSource 仅凭 access_token 的 JWT payload 解 email / sub / 过期时间。
-func convertATToSource(at, clientID string) (ImportSource, error) {
+func convertATToCandidate(at, clientID string, idx int) (importcore.ImportCandidate, error) {
 	email, subAccountID, expAt, err := decodeATClaims(at)
 	if err != nil {
-		return ImportSource{}, fmt.Errorf("解析 AT 失败:%w", err)
+		return importcore.ImportCandidate{}, fmt.Errorf("解析 AT 失败:%w", err)
 	}
 	if email == "" {
-		return ImportSource{}, errors.New("无法从 AT 解出 email,请改用 JSON 或带 email 的导入")
+		return importcore.ImportCandidate{}, errors.New("无法从 AT 解出 email,请改用 JSON 或带 email 的导入")
 	}
-	return ImportSource{
+	return importcore.ImportCandidate{
+		SourceType:       "access_token_text",
+		SourceRef:        fmt.Sprintf("line:%d", idx+1),
 		AccessToken:      at,
 		Email:            email,
 		ChatGPTAccountID: subAccountID,
-		ExpiredAt:        expAt,
+		TokenExpiresAt:   nullableTime(expAt),
 		ClientID:         clientID,
 		AccountType:      "chatgpt",
 	}, nil
@@ -167,14 +170,14 @@ func convertATToSource(at, clientID string) (ImportSource, error) {
 
 // convertRTToSource 用 refresh_token + client_id 调 auth.openai.com/oauth/token 换出 AT,
 // 再解 AT claims 拿 email。AT + RT 一起存进账号(后续仍可 RT 续签)。
-func convertRTToSource(ctx context.Context, httpc *http.Client, rt, clientID string) (ImportSource, error) {
+func convertRTToCandidate(ctx context.Context, httpc *http.Client, rt, clientID string, idx int) (importcore.ImportCandidate, error) {
 	at, newRT, expAt, err := rtExchange(ctx, httpc, rt, clientID)
 	if err != nil {
-		return ImportSource{}, fmt.Errorf("RT 换 AT 失败:%s", friendlyImportErr(err))
+		return importcore.ImportCandidate{}, fmt.Errorf("RT 换 AT 失败:%s", friendlyImportErr(err))
 	}
 	email, subAccID, expFromJWT, jerr := decodeATClaims(at)
 	if jerr != nil || email == "" {
-		return ImportSource{}, errors.New("RT 换出的 AT 无法解析出 email")
+		return importcore.ImportCandidate{}, errors.New("RT 换出的 AT 无法解析出 email")
 	}
 	if expAt.IsZero() {
 		expAt = expFromJWT
@@ -184,12 +187,14 @@ func convertRTToSource(ctx context.Context, httpc *http.Client, rt, clientID str
 	if newRT != "" {
 		usedRT = newRT
 	}
-	return ImportSource{
+	return importcore.ImportCandidate{
+		SourceType:       "refresh_token_text",
+		SourceRef:        fmt.Sprintf("line:%d", idx+1),
 		AccessToken:      at,
 		RefreshToken:     usedRT,
 		Email:            email,
 		ChatGPTAccountID: subAccID,
-		ExpiredAt:        expAt,
+		TokenExpiresAt:   nullableTime(expAt),
 		ClientID:         clientID,
 		AccountType:      "chatgpt",
 	}, nil
@@ -197,27 +202,82 @@ func convertRTToSource(ctx context.Context, httpc *http.Client, rt, clientID str
 
 // convertSTToSource 用 session_token 调 chatgpt.com/api/auth/session 换出 AT,再解 email。
 // AT + ST 一起存进账号(后续可由 ST 定时续签)。
-func convertSTToSource(ctx context.Context, httpc *http.Client, st, clientID string) (ImportSource, error) {
+func convertSTToCandidate(ctx context.Context, httpc *http.Client, st, clientID string, idx int) (importcore.ImportCandidate, error) {
 	at, expAt, err := stExchange(ctx, httpc, st)
 	if err != nil {
-		return ImportSource{}, fmt.Errorf("ST 换 AT 失败:%s", friendlyImportErr(err))
+		return importcore.ImportCandidate{}, fmt.Errorf("ST 换 AT 失败:%s", friendlyImportErr(err))
 	}
 	email, subAccID, expFromJWT, jerr := decodeATClaims(at)
 	if jerr != nil || email == "" {
-		return ImportSource{}, errors.New("ST 换出的 AT 无法解析出 email")
+		return importcore.ImportCandidate{}, errors.New("ST 换出的 AT 无法解析出 email")
 	}
 	if expAt.IsZero() {
 		expAt = expFromJWT
 	}
-	return ImportSource{
+	return importcore.ImportCandidate{
+		SourceType:       "session_token_text",
+		SourceRef:        fmt.Sprintf("line:%d", idx+1),
 		AccessToken:      at,
 		SessionToken:     st,
 		Email:            email,
 		ChatGPTAccountID: subAccID,
-		ExpiredAt:        expAt,
+		TokenExpiresAt:   nullableTime(expAt),
 		ClientID:         clientID,
 		AccountType:      "chatgpt",
 	}, nil
+}
+
+func importTokenSourceType(mode ImportTokenMode) string {
+	switch mode {
+	case ImportModeRT:
+		return "refresh_token_text"
+	case ImportModeST:
+		return "session_token_text"
+	default:
+		return "access_token_text"
+	}
+}
+
+func mergeLegacyBatchIntoImportSummary(base *importSummaryResponse, extra *ImportSummary) *importSummaryResponse {
+	if base == nil {
+		base = newImportSummaryResponse()
+	}
+	if extra == nil {
+		return base
+	}
+	for _, row := range extra.Results {
+		base = appendImportSummaryRow(base, importSummaryResultRow{
+			Email:  row.Email,
+			Status: row.Status,
+			Reason: row.Reason,
+			ID:     row.ID,
+		})
+	}
+	return base
+}
+
+func legacyImportSummary(summary *importSummaryResponse) *ImportSummary {
+	if summary == nil {
+		return &ImportSummary{Results: make([]ImportLineResult, 0)}
+	}
+	out := &ImportSummary{
+		Total:   summary.Total,
+		Created: summary.Created,
+		Updated: summary.Updated,
+		Skipped: summary.Skipped,
+		Failed:  summary.Failed,
+		Results: make([]ImportLineResult, 0, len(summary.Results)),
+	}
+	for i, row := range summary.Results {
+		out.Results = append(out.Results, ImportLineResult{
+			Index:  i,
+			Email:  row.Email,
+			Status: row.Status,
+			Reason: row.Reason,
+			ID:     row.ID,
+		})
+	}
+	return out
 }
 
 // ---------- 底层 HTTP ----------
