@@ -72,5 +72,5 @@
 
 - 基线分支: `codex/unified-account-import`
 - 任务分支: `codex/parallel-01-image-only-admin-slimming-design`
-- PR: 待创建,创建后回填
-- 合并状态: 待创建,合并后回填
+- PR: `#1` <https://github.com/SwimmingLiu/gpt2api/pull/1>
+- 合并方式: 由 `#1` 合并到 `codex/unified-account-import`
