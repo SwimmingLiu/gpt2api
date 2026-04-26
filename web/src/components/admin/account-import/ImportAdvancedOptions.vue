@@ -42,6 +42,9 @@ withDefaults(
           :disabled="item.disabled"
         />
       </el-select>
+      <div class="option-hint">
+        该代理作为统一导入阶段的默认代理使用；手动新增也复用这里的设置，避免与表单字段重复表达。
+      </div>
     </el-form-item>
 
     <el-form-item label="导入到账号池">
@@ -76,3 +79,12 @@ withDefaults(
     </el-form-item>
   </el-form>
 </template>
+
+<style scoped>
+.option-hint {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+</style>

@@ -98,8 +98,14 @@ watch(
   },
 )
 
+function assertNeverPane(value: never): never {
+  throw new Error(`unsupported import pane: ${String(value)}`)
+}
+
 function buildPayload(): DialogSubmitPayload {
   switch (activePane.value) {
+    case 'access_token':
+      return { kind: 'access_token', advanced: { ...advanced }, payload: { ...accessTokenModel } }
     case 'cpa':
       return { kind: 'cpa', advanced: { ...advanced }, payload: { ...cpaModel, files: [...cpaModel.files] } }
     case 'sub2api':
@@ -111,7 +117,7 @@ function buildPayload(): DialogSubmitPayload {
     case 'manual':
       return { kind: 'manual', advanced: { ...advanced }, payload: { ...manualModel } }
     default:
-      return { kind: 'access_token', advanced: { ...advanced }, payload: { ...accessTokenModel } }
+      return assertNeverPane(activePane.value)
   }
 }
 
@@ -141,8 +147,24 @@ function validateBeforeSubmit() {
       ElMessage.warning('手动新增必须填写邮箱')
       return false
     }
-    if (!manualModel.auth_token.trim()) {
-      ElMessage.warning('手动新增至少需要提供 access_token')
+    if (!manualModel.auth_token.trim() && !manualModel.refresh_token.trim() && !manualModel.session_token.trim()) {
+      ElMessage.warning('手动新增至少需要提供 access_token、refresh_token、session_token 其中之一')
+      return false
+    }
+    return true
+  }
+
+  if (activePane.value === 'cpa') {
+    if (!cpaModel.text.trim() && cpaModel.files.length === 0) {
+      ElMessage.warning('请提供 CPA 文本或至少选择一个文件')
+      return false
+    }
+    return true
+  }
+
+  if (activePane.value === 'sub2api') {
+    if (!sub2apiModel.text.trim() && sub2apiModel.files.length === 0) {
+      ElMessage.warning('请提供 sub2api 文本或至少选择一个文件')
       return false
     }
     return true

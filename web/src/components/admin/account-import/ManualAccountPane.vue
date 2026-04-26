@@ -47,6 +47,7 @@ withDefaults(
           :disabled="disabled"
           type="textarea"
         />
+        <div class="pane-hint">邮箱必填，AT / RT / ST 三者至少提供一个即可。</div>
       </el-form-item>
 
       <el-form-item label="Client ID">
@@ -84,3 +85,11 @@ withDefaults(
     </el-form>
   </div>
 </template>
+
+<style scoped>
+.pane-hint {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+</style>
