@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
+import { maybeMockResponse } from './devMock'
 
 /**
  * 统一响应结构,后端 `pkg/resp` 约定:
@@ -28,6 +29,14 @@ export const TOKEN_KEY = 'gpt2api.access'
 export const REFRESH_KEY = 'gpt2api.refresh'
 
 http.interceptors.request.use((config) => {
+  const mock = maybeMockResponse(config as any)
+  if (mock) {
+    config.adapter = async () => mock as any
+    return config
+  }
+  if (import.meta.env.VITE_DEV_MOCK === '1') {
+    return config
+  }
   const token = localStorage.getItem(TOKEN_KEY)
   if (token) {
     config.headers = config.headers || {}
@@ -91,4 +100,22 @@ http.interceptors.response.use(
 /** 直接传入返回体的辅助类型工具 */
 export function request<T = any>(cfg: AxiosRequestConfig): Promise<T> {
   return http.request(cfg) as unknown as Promise<T>
+}
+
+export function safeSetStorage(key: string, value: string) {
+  if (import.meta.env.VITE_DEV_MOCK === '1') return
+  try {
+    localStorage.setItem(key, value)
+  } catch (err) {
+    console.warn('localStorage quota exceeded, skip persist', key, err)
+  }
+}
+
+export function safeRemoveStorage(key: string) {
+  if (import.meta.env.VITE_DEV_MOCK === '1') return
+  try {
+    localStorage.removeItem(key)
+  } catch (err) {
+    console.warn('localStorage remove failed', key, err)
+  }
 }

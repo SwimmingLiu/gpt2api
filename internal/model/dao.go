@@ -125,15 +125,3 @@ UPDATE models
 	}
 	return nil
 }
-
-// GroupRatio 返回指定 model + group 的有效倍率(没有覆盖则返回 1.0)。
-func (d *DAO) GroupRatio(ctx context.Context, modelID, groupID uint64) (float64, error) {
-	var r float64
-	err := d.db.GetContext(ctx, &r,
-		`SELECT ratio FROM billing_ratios WHERE model_id = ? AND group_id = ?`,
-		modelID, groupID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 1.0, nil
-	}
-	return r, err
-}

@@ -5,7 +5,6 @@ import { fetchSiteInfo } from '@/api/settings'
 /**
  * Site store 缓存站点公开信息:
  *   site.name / site.description / site.logo_url / site.footer / site.contact_email
- *   auth.allow_register   — 用于登录/注册页判定是否展示注册入口
  *
  * 页面启动时 refresh() 一次即可;管理员改完设置会再触发一次 refresh。
  * 不依赖 token,匿名也能拿。
@@ -17,7 +16,6 @@ export const useSiteStore = defineStore('site', () => {
     'site.logo_url': '',
     'site.footer': '',
     'site.contact_email': '',
-    'auth.allow_register': 'true',
   })
   const loaded = ref(false)
 
@@ -55,10 +53,6 @@ export const useSiteStore = defineStore('site', () => {
     const v = info.value[key]
     return v == null || v === '' ? fallback : v
   }
-  function allowRegister(): boolean {
-    const v = (info.value['auth.allow_register'] || '').toLowerCase()
-    return v === 'true' || v === '1' || v === 'yes'
-  }
 
-  return { info, loaded, refresh, get, allowRegister }
+  return { info, loaded, refresh, get }
 })

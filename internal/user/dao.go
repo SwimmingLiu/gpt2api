@@ -24,7 +24,7 @@ func NewDAO(db *sqlx.DB) *DAO { return &DAO{db: db} }
 func (d *DAO) GetGroup(ctx context.Context, id uint64) (*Group, error) {
 	var g Group
 	err := d.db.GetContext(ctx, &g,
-		`SELECT id, name, ratio, daily_limit_credits, rpm_limit, tpm_limit, remark, created_at, updated_at
+		`SELECT id, name, ratio, rpm_limit, tpm_limit, remark, created_at, updated_at
          FROM user_groups WHERE id = ? AND deleted_at IS NULL`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -57,9 +57,9 @@ func (d *DAO) GetByEmail(ctx context.Context, email string) (*User, error) {
 // Create 插入新用户,返回自增 id。
 func (d *DAO) Create(ctx context.Context, u *User) (uint64, error) {
 	res, err := d.db.ExecContext(ctx,
-		`INSERT INTO users (email, password_hash, nickname, group_id, role, status, credit_balance)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		u.Email, u.PasswordHash, u.Nickname, u.GroupID, u.Role, u.Status, u.CreditBalance,
+		`INSERT INTO users (email, password_hash, nickname, group_id, role, status)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+		u.Email, u.PasswordHash, u.Nickname, u.GroupID, u.Role, u.Status,
 	)
 	if err != nil {
 		return 0, err

@@ -77,7 +77,7 @@ func (d *DAO) GetByEmail(ctx context.Context, email string) (*Account, error) {
 	return &a, nil
 }
 
-func (d *DAO) List(ctx context.Context, status string, keyword string, offset, limit int) ([]*Account, int64, error) {
+func (d *DAO) List(ctx context.Context, status string, keyword string, poolID uint64, offset, limit int) ([]*Account, int64, error) {
 	var total int64
 	var err error
 	var rows []*Account
@@ -92,6 +92,10 @@ func (d *DAO) List(ctx context.Context, status string, keyword string, offset, l
 		where += " AND (email LIKE ? OR notes LIKE ?)"
 		like := "%" + keyword + "%"
 		args = append(args, like, like)
+	}
+	if poolID > 0 {
+		where += " AND id IN (SELECT account_id FROM account_pool_members WHERE pool_id = ?)"
+		args = append(args, poolID)
 	}
 
 	if err = d.db.GetContext(ctx, &total, "SELECT COUNT(*) FROM oai_accounts WHERE "+where, args...); err != nil {
@@ -123,6 +127,25 @@ func (d *DAO) ListDispatchable(ctx context.Context, limit int) ([]*Account, erro
            CASE WHEN last_used_at IS NULL THEN 0 ELSE 1 END,
            last_used_at ASC
          LIMIT ?`, now, now, limit)
+	fillAll(rows)
+	return rows, err
+}
+
+// ListDispatchableByPool 返回指定账号池里可调度的候选账号。
+func (d *DAO) ListDispatchableByPool(ctx context.Context, poolID uint64, limit int) ([]*Account, error) {
+	rows := make([]*Account, 0, limit)
+	now := time.Now()
+	err := d.db.SelectContext(ctx, &rows,
+		`SELECT a.* FROM oai_accounts a
+         JOIN account_pool_members m ON m.account_id = a.id
+         JOIN account_pools p ON p.id = m.pool_id
+         WHERE a.deleted_at IS NULL AND a.status = 'healthy'
+           AND (a.cooldown_until IS NULL OR a.cooldown_until <= ?)
+           AND (a.token_expires_at IS NULL OR a.token_expires_at > ?)
+           AND m.pool_id = ? AND m.enabled = 1
+           AND p.deleted_at IS NULL AND p.enabled = 1
+         ORDER BY CASE WHEN a.last_used_at IS NULL THEN 0 ELSE 1 END, a.last_used_at ASC
+         LIMIT ?`, now, now, poolID, limit)
 	fillAll(rows)
 	return rows, err
 }

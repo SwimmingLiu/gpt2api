@@ -23,18 +23,12 @@ export interface UserInfo {
   role: string
   status: string
   group_id: number
-  credit_balance: number
-  credit_frozen: number
   created_at?: string
   last_login_at?: string
 }
 
 export function login(req: LoginReq): Promise<LoginResp> {
   return http.post('/api/auth/login', req)
-}
-
-export function register(req: { email: string; password: string; nickname?: string }): Promise<UserInfo> {
-  return http.post('/api/auth/register', req)
 }
 
 export interface MeResp {

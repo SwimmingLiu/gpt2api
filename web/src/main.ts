@@ -15,8 +15,28 @@ import { printBrandToConsole, startBrandGuard } from './utils/brand'
 
 const app = createApp(App)
 
+const safeStorage = {
+  getItem(key: string) {
+    try { return localStorage.getItem(key) } catch { return null }
+  },
+  setItem(key: string, value: string) {
+    try { localStorage.setItem(key, value) } catch (err) { console.warn('pinia persist skipped', key, err) }
+  },
+  removeItem(key: string) {
+    try { localStorage.removeItem(key) } catch (err) { console.warn('pinia remove skipped', key, err) }
+  },
+}
+
 const pinia = createPinia()
-pinia.use(piniaPersist)
+if (import.meta.env.VITE_DEV_MOCK !== '1') {
+  pinia.use(({ options }) => {
+    const persist = (options as any).persist
+    if (persist && typeof persist === 'object' && !Array.isArray(persist) && !persist.storage) {
+      persist.storage = safeStorage
+    }
+  })
+  pinia.use(piniaPersist)
+}
 app.use(pinia)
 app.use(router)
 app.use(ElementPlus, { size: 'default', locale: zhCn })

@@ -25,14 +25,14 @@ func (d *DAO) Create(ctx context.Context, t *Task) error {
 	res, err := d.db.ExecContext(ctx, `
 INSERT INTO image_tasks
   (task_id, user_id, key_id, model_id, account_id, prompt, n, size, upscale, status,
-   conversation_id, file_ids, result_urls, error, estimated_credit, credit_cost,
+   conversation_id, file_ids, result_urls, error,
    created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())`,
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())`,
 		t.TaskID, t.UserID, t.KeyID, t.ModelID, t.AccountID,
 		t.Prompt, t.N, t.Size, ValidateUpscale(t.Upscale),
 		nullEmpty(t.Status, StatusQueued),
 		t.ConversationID, nullJSON(t.FileIDs), nullJSON(t.ResultURLs),
-		t.Error, t.EstimatedCredit, t.CreditCost,
+		t.Error,
 	)
 	if err != nil {
 		return fmt.Errorf("image dao create: %w", err)
@@ -62,7 +62,7 @@ func (d *DAO) SetAccount(ctx context.Context, taskID string, accountID uint64) e
 }
 
 // MarkSuccess 更新成功状态。
-func (d *DAO) MarkSuccess(ctx context.Context, taskID, convID string, fileIDs, resultURLs []string, creditCost int64) error {
+func (d *DAO) MarkSuccess(ctx context.Context, taskID, convID string, fileIDs, resultURLs []string, _ int64) error {
 	fidB, _ := json.Marshal(fileIDs)
 	urlB, _ := json.Marshal(resultURLs)
 	_, err := d.db.ExecContext(ctx, `
@@ -71,16 +71,16 @@ UPDATE image_tasks
        conversation_id=?,
        file_ids=?,
        result_urls=?,
-       credit_cost=?,
        finished_at=NOW()
- WHERE task_id=?`, convID, fidB, urlB, creditCost, taskID)
+ WHERE task_id=?`, convID, fidB, urlB, taskID)
 	return err
 }
 
-// UpdateCost 仅更新 credit_cost(Runner 成功后由网关层调用)。
+// UpdateCost 保留空实现以兼容现有调用点。
 func (d *DAO) UpdateCost(ctx context.Context, taskID string, cost int64) error {
-	_, err := d.db.ExecContext(ctx,
-		`UPDATE image_tasks SET credit_cost = ? WHERE task_id = ?`, cost, taskID)
+	_ = taskID
+	_ = cost
+	var err error
 	return err
 }
 
@@ -98,7 +98,7 @@ func (d *DAO) Get(ctx context.Context, taskID string) (*Task, error) {
 	var t Task
 	err := d.db.GetContext(ctx, &t, `
 SELECT id, task_id, user_id, key_id, model_id, account_id, prompt, n, size, upscale, status,
-       conversation_id, file_ids, result_urls, error, estimated_credit, credit_cost,
+       conversation_id, file_ids, result_urls, error,
        created_at, started_at, finished_at
   FROM image_tasks
  WHERE task_id = ?`, taskID)
@@ -119,7 +119,7 @@ func (d *DAO) ListByUser(ctx context.Context, userID uint64, limit, offset int) 
 	var out []Task
 	err := d.db.SelectContext(ctx, &out, `
 SELECT id, task_id, user_id, key_id, model_id, account_id, prompt, n, size, upscale, status,
-       conversation_id, file_ids, result_urls, error, estimated_credit, credit_cost,
+       conversation_id, file_ids, result_urls, error,
        created_at, started_at, finished_at
   FROM image_tasks
  WHERE user_id = ?
@@ -172,7 +172,6 @@ func (d *DAO) ListAdmin(ctx context.Context, f AdminTaskFilter, limit, offset in
 SELECT t.id, t.task_id, t.user_id, t.key_id, t.model_id, t.account_id,
        t.prompt, t.n, t.size, t.upscale, t.status,
        t.conversation_id, t.file_ids, t.result_urls, t.error,
-       t.estimated_credit, t.credit_cost,
        t.created_at, t.started_at, t.finished_at,
        COALESCE(u.email, '') AS user_email
   FROM image_tasks t

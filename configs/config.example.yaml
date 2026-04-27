@@ -4,6 +4,11 @@ app:
   listen: ":8080"
   base_url: "http://localhost:8080"
 
+gateway:
+  static_bearer_token: "CHANGE_ME_IMAGE_GATEWAY_TOKEN"
+  default_image_pool_id: 0
+  default_fallback_pool_id: 0
+
 log:
   level: info           # debug | info | warn | error
   format: console       # console | json
@@ -52,16 +57,6 @@ upstream:
   base_url: "https://chatgpt.com"
   request_timeout_sec: 60
   sse_read_timeout_sec: 300
-
-# 支付(易支付)
-epay:
-  gateway_url: ""
-  pid: ""
-  key: ""
-  notify_url: ""
-  return_url: ""
-  sign_type: "MD5"
-  expires_min: 30
 
 smtp:
   host: ""

@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
 import * as accountApi from '@/api/accounts'
+import * as importSourceApi from '@/api/account-import-sources'
+import { http } from '@/api/http'
 import * as proxyApi from '@/api/proxies'
+import AccountImportDialog from '@/components/admin/account-import/AccountImportDialog.vue'
+import type {
+  DialogSubmitPayload,
+  FileImportModel,
+  ImportDialogResultRow,
+  SelectOption,
+} from '@/components/admin/account-import/types'
 import { formatDateShort } from '@/utils/format'
 
 // ========== 列表 & 筛选 ==========
@@ -13,6 +21,34 @@ const rows = ref<accountApi.Account[]>([])
 const total = ref(0)
 const pager = reactive({ page: 1, page_size: 10 })
 const proxies = ref<proxyApi.Proxy[]>([])
+const proxyOptions = computed<SelectOption[]>(() =>
+  proxies.value.map((item) => ({
+    value: item.id,
+    label: `#${item.id} ${item.remark || item.host}:${item.port}`,
+    disabled: !item.enabled,
+  })),
+)
+const poolOptions = ref<SelectOption[]>([])
+
+interface AccountPoolListItem {
+  id: number
+  code?: string
+  name?: string
+  enabled?: boolean
+}
+
+async function fetchPools() {
+  try {
+    const data = await http.get<any, { items?: AccountPoolListItem[] }>('/api/admin/account-pools')
+    poolOptions.value = (data.items || []).map((item) => ({
+      value: item.id,
+      label: item.name ? `${item.name} (${item.code || `#${item.id}`})` : item.code || `#${item.id}`,
+      disabled: item.enabled === false,
+    }))
+  } catch {
+    /* noop */
+  }
+}
 
 async function fetchList() {
   loading.value = true
@@ -422,266 +458,259 @@ async function onProbeAll() {
   }
 }
 
-// ========== 批量导入(多文件 + 分批) ==========
-// 4 种模式:
-//   - json: 文件/JSON 文本,原有行为
-//   - at:   一行一个 access_token
-//   - rt:   一行一个 refresh_token,必须提供 APPID(client_id)
-//   - st:   一行一个 session_token
-type ImportMode = 'json' | 'at' | 'rt' | 'st'
 const importDlg = ref(false)
-const importMode = ref<ImportMode>('json')
-const importForm = reactive({
-  files: [] as File[],
-  text: '',
-  tokens_text: '',
-  update_existing: true,
-  default_client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
-  default_proxy_id: 0,
-})
 const importing = ref(false)
-const importProgress = reactive({
-  running: false,
-  current: 0,
-  totalBatches: 0,
-  created: 0,
-  updated: 0,
-  skipped: 0,
-  failed: 0,
-})
-const importResult = ref<accountApi.ImportSummary | null>(null)
-const importLastErrors = ref<accountApi.ImportLineResult[]>([])
+const importResultRows = ref<ImportDialogResultRow[]>([])
+const BATCH_FILES = 200
+const BATCH_BYTES = 8 * 1024 * 1024
 
 function openImport() {
-  importMode.value = 'json'
-  importForm.files = []
-  importForm.text = ''
-  importForm.tokens_text = ''
-  importForm.update_existing = true
-  importForm.default_client_id = 'app_EMoamEEZ73f0CkXaXp7hrann'
-  importForm.default_proxy_id = 0
-  importResult.value = null
-  importLastErrors.value = []
-  importProgress.running = false
-  importProgress.current = 0
-  importProgress.totalBatches = 0
-  importProgress.created = 0
-  importProgress.updated = 0
-  importProgress.skipped = 0
-  importProgress.failed = 0
+  importResultRows.value = []
   importDlg.value = true
 }
 
-// 当前 tokens 模式下,每行 token 的数量预览
-const tokenLineCount = computed(() => {
-  if (importMode.value === 'json') return 0
-  return importForm.tokens_text
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean).length
-})
-
-function onPickFiles(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (!input.files) return
-  const arr = Array.from(input.files)
-  importForm.files.push(...arr)
-  input.value = ''
-}
-function onDropFiles(e: DragEvent) {
-  e.preventDefault()
-  if (!e.dataTransfer) return
-  const arr = Array.from(e.dataTransfer.files).filter((f) => f.name.endsWith('.json') || f.name.endsWith('.txt'))
-  importForm.files.push(...arr)
-}
-function removeFile(i: number) {
-  importForm.files.splice(i, 1)
-}
-function clearFiles() {
-  importForm.files = []
+function showImportSummary(summary: accountApi.ImportSummary, title = '账号导入完成') {
+  const message = `新增 ${summary.created} · 更新 ${summary.updated} · 跳过 ${summary.skipped} · 失败 ${summary.failed}`
+  if (summary.failed > 0 || summary.skipped > 0) {
+    ElNotification.warning({ title, message, duration: 5000 })
+    return
+  }
+  ElNotification.success({ title, message, duration: 4000 })
 }
 
-const totalFileSize = computed(() => importForm.files.reduce((s, f) => s + f.size, 0))
-function humanSize(n: number) {
-  if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  return (n / 1024 / 1024).toFixed(2) + ' MB'
+function toResultRows(summary: accountApi.ImportSummary): ImportDialogResultRow[] {
+  return summary.results.map((row) => ({ ...row }))
 }
 
-/**
- * 前端分批:
- *   - 一批最多 BATCH_FILES 个文件或 BATCH_BYTES 字节,两者取先到者
- *   - 每批通过 multipart 上传,后端会解析并 upsert
- *   - 每批完成后更新进度,并 yield 事件循环
- * 选 10000 个文件时会自动切分 ~50 批,每批 ~200 个
- */
-const BATCH_FILES = 200
-const BATCH_BYTES = 8 * 1024 * 1024 // 8MB
+function mergeImportSummaries(
+  left: accountApi.ImportSummary,
+  right: accountApi.ImportSummary,
+): accountApi.ImportSummary {
+  return {
+    total: left.total + right.total,
+    created: left.created + right.created,
+    updated: left.updated + right.updated,
+    skipped: left.skipped + right.skipped,
+    failed: left.failed + right.failed,
+    results: [...left.results, ...right.results],
+  }
+}
 
-async function doImport() {
-  importLastErrors.value = []
-  importResult.value = null
+function createEmptySummary(): accountApi.ImportSummary {
+  return {
+    total: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+  }
+}
 
-  // 情况 0:AT/RT/ST 纯 token 模式
-  if (importMode.value !== 'json') {
-    const mode = importMode.value
-    const tokens = importForm.tokens_text
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-    if (tokens.length === 0) {
-      ElMessage.warning('请粘贴 token,每行一个')
-      return
+function normalizeBatchFiles(files: File[]) {
+  const batches: File[][] = []
+  let current: File[] = []
+  let currentBytes = 0
+  for (const file of files) {
+    if (
+      current.length >= BATCH_FILES ||
+      (currentBytes + file.size > BATCH_BYTES && current.length > 0)
+    ) {
+      batches.push(current)
+      current = []
+      currentBytes = 0
     }
-    if (mode === 'rt' && !importForm.default_client_id.trim()) {
-      ElMessage.warning('RT 模式必须填写 APPID(client_id)')
-      return
-    }
-    if ((mode === 'rt' || mode === 'st') && !importForm.default_proxy_id) {
+    current.push(file)
+    currentBytes += file.size
+  }
+  if (current.length > 0) batches.push(current)
+  return batches
+}
+
+async function confirmTokenImportWithoutProxy(payload: DialogSubmitPayload) {
+  if (payload.kind !== 'access_token') return true
+  if (payload.payload.mode !== 'rt' && payload.payload.mode !== 'st') return true
+  if (payload.advanced.default_proxy_id) return true
+  const modeLabel = payload.payload.mode.toUpperCase()
+  try {
+    await ElMessageBox.confirm(
+      `${modeLabel} 模式需要访问 chatgpt.com / auth.openai.com 换取 AT。当前未选择默认代理，直连很可能失败。确认继续吗？`,
+      '未选择默认代理',
+      {
+        confirmButtonText: '继续提交',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function submitJSONLikeImport(
+  model: FileImportModel,
+  sourceKind: 'cpa_file' | 'sub2api_json',
+  advanced: DialogSubmitPayload['advanced'],
+) {
+  const options = {
+    source_kind: sourceKind,
+    update_existing: advanced.update_existing,
+    default_proxy_id: advanced.default_proxy_id,
+    target_pool_id: advanced.target_pool_id,
+    resolve_identity: advanced.resolve_identity,
+    kick_refresh: advanced.kick_refresh,
+    kick_quota_probe: advanced.kick_quota_probe,
+  }
+  if (model.files.length > 0) {
+    const batches = normalizeBatchFiles(model.files)
+    let merged = createEmptySummary()
+    let resultOffset = 0
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i]
       try {
-        await ElMessageBox.confirm(
-          `${mode.toUpperCase()} 模式需要访问 chatgpt.com / auth.openai.com 换取 AT。未选择代理时会直连,国内网络大概率失败。确认继续吗?`,
-          '建议选一个代理',
-          { confirmButtonText: '继续直连', cancelButtonText: '取消', type: 'warning' },
-        )
-      } catch {
-        return
+        const summary = await accountApi.importAccountsFiles(batch, options)
+        const normalized: accountApi.ImportSummary = {
+          ...summary,
+          results: summary.results.map((row, index) => ({
+            ...row,
+            index: resultOffset + index + 1,
+          })),
+        }
+        merged = mergeImportSummaries(merged, normalized)
+        resultOffset = merged.results.length
+      } catch (e: any) {
+        const failedSummary: accountApi.ImportSummary = {
+          total: batch.length,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          failed: batch.length,
+          results: batch.map((file, index) => ({
+            index: resultOffset + index + 1,
+            source_type: sourceKind,
+            source_ref: file.name,
+            email: '',
+            status: 'failed',
+            reason: e?.message || `第 ${i + 1} 批上传失败`,
+          })),
+        }
+        merged = mergeImportSummaries(merged, failedSummary)
+        resultOffset = merged.results.length
       }
     }
-    importing.value = true
-    importProgress.running = true
-    importProgress.current = 0
-    importProgress.totalBatches = 1
-    try {
-      const r = await accountApi.importAccountsTokens({
-        mode,
-        tokens,
-        client_id: importForm.default_client_id.trim() || undefined,
-        update_existing: importForm.update_existing,
-        default_proxy_id: importForm.default_proxy_id || undefined,
-      })
-      mergeSummary(r)
-      importResult.value = cloneAgg()
-      importLastErrors.value = r.results
-        .filter((x) => x.status === 'failed' || x.status === 'skipped')
-        .slice(0, 200)
-      const tip = `${mode.toUpperCase()} 导入完成:+${r.created} / ~${r.updated} / 跳过${r.skipped} / 失败${r.failed}`
-      if (r.failed > 0) ElNotification.warning({ title: '批量导入完成(部分失败)', message: tip })
-      else ElMessage.success(tip)
-    } catch (e: any) {
-      ElMessage.error(e?.message || '导入失败')
-    } finally {
-      importing.value = false
-      importProgress.running = false
-      fetchList()
-    }
-    return
+    return merged
   }
+  return accountApi.importAccountsJSON({
+    text: model.text,
+    ...options,
+  })
+}
 
-  // 情况一:纯文本导入(JSON 模式)
-  if (importForm.files.length === 0) {
-    if (!importForm.text.trim()) { ElMessage.warning('请选择 JSON 文件或粘贴 JSON 文本'); return }
-    importing.value = true
-    importProgress.running = true
-    importProgress.current = 0
-    importProgress.totalBatches = 1
-    try {
-      const r = await accountApi.importAccountsJSON({
-        text: importForm.text,
-        update_existing: importForm.update_existing,
-        default_client_id: importForm.default_client_id || undefined,
-        default_proxy_id: importForm.default_proxy_id || undefined,
-      })
-      mergeSummary(r)
-      importResult.value = cloneAgg()
-      importLastErrors.value = r.results.filter((x) => x.status === 'failed' || x.status === 'skipped').slice(0, 200)
-      ElMessage.success(`导入完成:+${r.created} / ~${r.updated} / 跳过${r.skipped} / 失败${r.failed}`)
-    } catch (e: any) {
-      ElMessage.error(e?.message || '导入失败')
-    } finally {
-      importing.value = false
-      importProgress.running = false
-      fetchList()
-    }
-    return
-  }
+async function submitRemoteImport(
+  model: FileImportModel,
+  kind: 'cpa' | 'sub2api',
+  advanced: DialogSubmitPayload['advanced'],
+) {
+  if (!model.source_id) throw new Error('missing remote source id')
+  return importSourceApi.importRemoteAccountSource(model.source_id, {
+    account_ids: kind === 'sub2api' ? model.selected_remote_ids : undefined,
+    file_names: kind === 'cpa' ? model.selected_remote_ids : undefined,
+    update_existing: advanced.update_existing,
+    default_proxy_id: advanced.default_proxy_id,
+    target_pool_id: advanced.target_pool_id,
+    resolve_identity: advanced.resolve_identity,
+    kick_refresh: advanced.kick_refresh,
+    kick_quota_probe: advanced.kick_quota_probe,
+  })
+}
 
-  // 情况二:多文件分批
-  const batches: File[][] = []
-  let curBatch: File[] = []
-  let curBytes = 0
-  for (const f of importForm.files) {
-    if ((curBatch.length >= BATCH_FILES) || (curBytes + f.size > BATCH_BYTES && curBatch.length > 0)) {
-      batches.push(curBatch)
-      curBatch = []
-      curBytes = 0
-    }
-    curBatch.push(f)
-    curBytes += f.size
-  }
-  if (curBatch.length) batches.push(curBatch)
+function assertNeverPayload(value: never): never {
+  throw new Error(`unsupported import payload: ${JSON.stringify(value)}`)
+}
+
+async function handleImportSubmit(payload: DialogSubmitPayload) {
+  if (!(await confirmTokenImportWithoutProxy(payload))) return
 
   importing.value = true
-  importProgress.running = true
-  importProgress.current = 0
-  importProgress.totalBatches = batches.length
-  importProgress.created = 0
-  importProgress.updated = 0
-  importProgress.skipped = 0
-  importProgress.failed = 0
-  const errList: accountApi.ImportLineResult[] = []
-
   try {
-    for (let i = 0; i < batches.length; i++) {
-      const b = batches[i]
-      try {
-        const r = await accountApi.importAccountsFiles(b, {
-          update_existing: importForm.update_existing,
-          default_client_id: importForm.default_client_id || undefined,
-          default_proxy_id: importForm.default_proxy_id || undefined,
+    let nextRows: ImportDialogResultRow[] = []
+    switch (payload.kind) {
+      case 'access_token': {
+        const result = await accountApi.importAccountsTokens({
+          mode: payload.payload.mode,
+          tokens: payload.payload.tokens_text,
+          client_id: payload.payload.client_id.trim() || undefined,
+          update_existing: payload.advanced.update_existing,
+          default_proxy_id: payload.advanced.default_proxy_id,
+          target_pool_id: payload.advanced.target_pool_id,
+          resolve_identity: payload.advanced.resolve_identity,
+          kick_refresh: payload.advanced.kick_refresh,
+          kick_quota_probe: payload.advanced.kick_quota_probe,
         })
-        mergeSummary(r)
-        for (const it of r.results) {
-          if ((it.status === 'failed' || it.status === 'skipped') && errList.length < 500) {
-            errList.push(it)
-          }
-        }
-      } catch (e: any) {
-        importProgress.failed += b.length
-        errList.push({ index: i, email: `[批次#${i + 1}]`, status: 'failed', reason: e?.message || '上传失败' })
+        nextRows = toResultRows(result)
+        showImportSummary(result, `${payload.payload.mode.toUpperCase()} 导入完成`)
+        break
       }
-      importProgress.current = i + 1
-      // 让出事件循环,避免阻塞 UI
-      await new Promise((r) => setTimeout(r, 0))
+      case 'cpa':
+      case 'sub2api': {
+        const result = payload.payload.mode === 'remote'
+          ? await submitRemoteImport(payload.payload, payload.kind, payload.advanced)
+          : await submitJSONLikeImport(
+              payload.payload,
+              payload.kind === 'cpa' ? 'cpa_file' : 'sub2api_json',
+              payload.advanced,
+            )
+        nextRows = toResultRows(result)
+        const modeLabel = payload.payload.mode === 'remote' ? '远程导入' : '导入'
+        showImportSummary(
+          result,
+          payload.kind === 'cpa' ? `CPA ${modeLabel}完成` : `sub2api ${modeLabel}完成`,
+        )
+        break
+      }
+      case 'manual': {
+        const body: accountApi.AccountCreate & { resolve_identity?: boolean } = {
+          email: payload.payload.email.trim(),
+          auth_token: payload.payload.auth_token.trim(),
+          refresh_token: payload.payload.refresh_token.trim() || undefined,
+          session_token: payload.payload.session_token.trim() || undefined,
+          client_id: payload.payload.client_id.trim() || undefined,
+          account_type: payload.payload.account_type,
+          plan_type: payload.payload.plan_type,
+          daily_image_quota: payload.payload.daily_image_quota,
+          notes: payload.payload.notes,
+          proxy_id: payload.advanced.default_proxy_id,
+          target_pool_id: payload.advanced.target_pool_id,
+          resolve_identity: payload.advanced.resolve_identity,
+          kick_refresh: payload.advanced.kick_refresh,
+          kick_quota_probe: payload.advanced.kick_quota_probe,
+        }
+        const account = await accountApi.createAccount(body)
+        nextRows = [{
+          index: 1,
+          source_type: 'manual',
+          source_ref: payload.payload.email.trim(),
+          email: account.email,
+          status: 'created',
+          id: account.id,
+        }]
+        ElNotification.success({
+          title: '手动新增完成',
+          message: `已写入账号 ${account.email}`,
+          duration: 4000,
+        })
+        break
+      }
+      default:
+        assertNeverPayload(payload)
     }
-    importResult.value = cloneAgg()
-    importLastErrors.value = errList
-    ElNotification.success({
-      title: '批量导入完成',
-      message: `+${importProgress.created}  ~${importProgress.updated}  跳过 ${importProgress.skipped}  失败 ${importProgress.failed}`,
-      duration: 5000,
-    })
+    importResultRows.value = nextRows
+    await fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导入失败')
   } finally {
     importing.value = false
-    importProgress.running = false
-    fetchList()
-  }
-}
-
-function mergeSummary(r: accountApi.ImportSummary) {
-  importProgress.created += r.created
-  importProgress.updated += r.updated
-  importProgress.skipped += r.skipped
-  importProgress.failed  += r.failed
-}
-function cloneAgg(): accountApi.ImportSummary {
-  return {
-    total:   importProgress.created + importProgress.updated + importProgress.skipped + importProgress.failed,
-    created: importProgress.created,
-    updated: importProgress.updated,
-    skipped: importProgress.skipped,
-    failed:  importProgress.failed,
-    results: [],
   }
 }
 
@@ -696,6 +725,7 @@ async function loadQuotaSummary() {
 onMounted(() => {
   fetchList()
   fetchProxies()
+  fetchPools()
   loadAutoRefresh()
   loadQuotaSummary()
 })
@@ -1086,188 +1116,14 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹窗 -->
-    <el-dialog v-model="importDlg" title="批量导入账号" width="760px" destroy-on-close>
-      <!-- 模式 tab -->
-      <el-tabs v-model="importMode" class="import-tabs">
-        <el-tab-pane label="JSON 文件" name="json" />
-        <el-tab-pane label="Access Token" name="at" />
-        <el-tab-pane label="Refresh Token" name="rt" />
-        <el-tab-pane label="Session Token" name="st" />
-      </el-tabs>
-
-      <!-- JSON 模式 -->
-      <template v-if="importMode === 'json'">
-        <div class="tip">
-          支持两种 JSON:<b>sub2api-account-*.json</b>(多账号)与 <b>token_*.json</b>(单账号)。
-          可一次选择多个文件,前端会按每批 {{ BATCH_FILES }} 个文件 / {{ humanSize(BATCH_BYTES) }} 自动分批上传,不会卡页面。
-        </div>
-
-        <!-- 文件选择 + 拖拽 -->
-        <div class="drop-zone" @dragover.prevent @drop="onDropFiles">
-          <el-icon class="drop-ic"><Upload /></el-icon>
-          <div class="drop-text">
-            把 JSON 文件拖到这里,或
-            <label class="link">
-              <input type="file" accept=".json,.txt,application/json" multiple hidden @change="onPickFiles" />
-              选择文件
-            </label>
-          </div>
-          <div class="drop-sub">
-            已选 <b>{{ importForm.files.length }}</b> 个文件
-            <span v-if="importForm.files.length > 0"> · 合计 {{ humanSize(totalFileSize) }}</span>
-          </div>
-        </div>
-
-        <div v-if="importForm.files.length" class="file-list">
-          <div class="file-list-head">
-            <span>{{ importForm.files.length }} 个文件</span>
-            <el-button link type="danger" size="small" @click="clearFiles">清空</el-button>
-          </div>
-          <div class="file-list-body">
-            <div v-for="(f, i) in importForm.files.slice(0, 50)" :key="i" class="file-row">
-              <span class="fname">{{ f.name }}</span>
-              <span class="fsize">{{ humanSize(f.size) }}</span>
-              <el-button link size="small" @click="removeFile(i)">×</el-button>
-            </div>
-            <div v-if="importForm.files.length > 50" class="muted" style="text-align:center;margin-top:6px">
-              ……另有 {{ importForm.files.length - 50 }} 个文件未展示
-            </div>
-          </div>
-        </div>
-
-        <el-divider content-position="left">或粘贴 JSON 文本</el-divider>
-        <el-input
-          v-model="importForm.text"
-          type="textarea" :rows="5"
-          placeholder="粘贴 sub2api 或 token_*.json 内容,多个 JSON 可以直接换行拼接(JSONL)"
-          spellcheck="false"
-        />
-      </template>
-
-      <!-- AT 模式 -->
-      <template v-else-if="importMode === 'at'">
-        <div class="tip">
-          一行一个 <b>access_token</b>(eyJ... 开头的 JWT)。
-          服务端会解析 JWT payload 里的 email 作为账号唯一键,若 AT 里没有 email 字段,该行会进入失败列表。
-        </div>
-        <el-input
-          v-model="importForm.tokens_text"
-          type="textarea" :rows="10"
-          placeholder="eyJhbGci...&#10;eyJhbGci...&#10;..."
-          spellcheck="false"
-        />
-        <div class="token-count">共 {{ tokenLineCount }} 行</div>
-      </template>
-
-      <!-- RT 模式 -->
-      <template v-else-if="importMode === 'rt'">
-        <div class="tip">
-          一行一个 <b>refresh_token</b>。系统会用你填写的 <b>APPID(client_id)</b> 向
-          <code>auth.openai.com/oauth/token</code> 换出 AT,再从 AT 解出 email 后入库。
-          <strong class="warn">需要选择代理,否则大概率超时。</strong>
-        </div>
-        <el-input
-          v-model="importForm.tokens_text"
-          type="textarea" :rows="9"
-          placeholder="v1.rt_...&#10;v1.rt_...&#10;..."
-          spellcheck="false"
-        />
-        <div class="token-count">共 {{ tokenLineCount }} 行</div>
-      </template>
-
-      <!-- ST 模式 -->
-      <template v-else-if="importMode === 'st'">
-        <div class="tip">
-          一行一个 <b>session_token</b>(浏览器 cookie 里的 <code>__Secure-next-auth.session-token</code>)。
-          系统会用它调 <code>chatgpt.com/api/auth/session</code> 换出 AT,再从 AT 解 email。
-          <strong class="warn">ST 模式必须有代理(chatgpt.com 国内不可直连)。</strong>
-        </div>
-        <el-input
-          v-model="importForm.tokens_text"
-          type="textarea" :rows="10"
-          placeholder="eyJhbGci...&#10;eyJhbGci...&#10;..."
-          spellcheck="false"
-        />
-        <div class="token-count">共 {{ tokenLineCount }} 行</div>
-      </template>
-
-      <div style="margin-top: 14px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center">
-        <el-checkbox v-model="importForm.update_existing">邮箱已存在则更新 token</el-checkbox>
-        <div>
-          <span class="muted" style="margin-right: 6px">
-            {{ importMode === 'rt' ? 'APPID(client_id,必填)' : 'client_id' }}
-          </span>
-          <el-input
-            v-model="importForm.default_client_id"
-            size="small" style="width: 280px"
-            :placeholder="importMode === 'rt' ? 'app_xxxxxxxxxxxxxxxxxxxxxxxx(必填)' : '可选,默认 ChatGPT iOS'"
-          />
-        </div>
-        <div>
-          <span class="muted" style="margin-right: 6px">
-            {{ importMode === 'st' || importMode === 'rt' ? '代理(强烈推荐)' : '默认代理' }}
-          </span>
-          <el-select v-model="importForm.default_proxy_id" clearable size="small" style="width: 220px">
-            <el-option :value="0" label="不绑定" />
-            <el-option v-for="p in proxies" :key="p.id" :label="`#${p.id} ${p.remark || p.host}:${p.port}`" :value="p.id" />
-          </el-select>
-        </div>
-      </div>
-
-      <!-- 进度条 -->
-      <div v-if="importProgress.running || importResult" class="progress">
-        <div class="progress-head">
-          <span v-if="importProgress.running">
-            正在导入:第 <b>{{ importProgress.current }}</b> / {{ importProgress.totalBatches }} 批
-          </span>
-          <span v-else>
-            导入已完成
-          </span>
-          <span class="stat">
-            <el-tag type="success" size="small">+{{ importProgress.created }}</el-tag>
-            <el-tag type="warning" size="small">~{{ importProgress.updated }}</el-tag>
-            <el-tag type="info" size="small">跳过 {{ importProgress.skipped }}</el-tag>
-            <el-tag type="danger" size="small">失败 {{ importProgress.failed }}</el-tag>
-          </span>
-        </div>
-        <el-progress
-          :percentage="importProgress.totalBatches > 0
-            ? Math.round((importProgress.current / importProgress.totalBatches) * 100)
-            : 0"
-          :status="importProgress.running ? '' : (importProgress.failed > 0 ? 'warning' : 'success')"
-        />
-      </div>
-
-      <!-- 错误/跳过明细 -->
-      <div v-if="importLastErrors.length" class="err-list">
-        <div class="err-list-head">未成功明细({{ importLastErrors.length }})</div>
-        <el-table :data="importLastErrors" size="small" max-height="220">
-          <el-table-column prop="email" label="邮箱" min-width="200" />
-          <el-table-column label="状态" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.status === 'failed' ? 'danger' : 'info'">
-                {{ row.status === 'failed' ? '失败' : '跳过' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="reason" label="原因" min-width="240" show-overflow-tooltip />
-        </el-table>
-      </div>
-
-      <template #footer>
-        <el-button :disabled="importing" @click="importDlg = false">关闭</el-button>
-        <el-button type="primary" :loading="importing" @click="doImport">
-          开始导入
-          <span v-if="importMode === 'json' && importForm.files.length > 0">
-            ({{ importForm.files.length }} 个文件)
-          </span>
-          <span v-else-if="importMode !== 'json' && tokenLineCount > 0">
-            ({{ tokenLineCount }} 条 {{ importMode.toUpperCase() }})
-          </span>
-        </el-button>
-      </template>
-    </el-dialog>
+    <AccountImportDialog
+      v-model="importDlg"
+      :loading="importing"
+      :result-rows="importResultRows"
+      :proxy-options="proxyOptions"
+      :pool-options="poolOptions"
+      @submit="handleImportSubmit"
+    />
   </div>
 </template>
 
@@ -1325,68 +1181,6 @@ onMounted(() => {
 .pager {
   display: flex; justify-content: flex-end;
   margin-top: 14px;
-}
-
-/* ====== 批量导入弹窗 ====== */
-.import-tabs {
-  margin-top: -8px;
-  margin-bottom: 10px;
-  :deep(.el-tabs__header) { margin-bottom: 12px; }
-}
-.tip {
-  color: var(--el-text-color-secondary);
-  font-size: 13px; line-height: 1.6;
-  background: var(--el-fill-color-light);
-  padding: 10px 12px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  code {
-    background: rgba(0, 0, 0, 0.06);
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-family: inherit;
-  }
-  .warn {
-    color: var(--el-color-warning);
-    margin-left: 4px;
-  }
-}
-.token-count {
-  text-align: right;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 6px;
-}
-
-.drop-zone {
-  border: 1.5px dashed var(--el-border-color);
-  border-radius: 10px;
-  padding: 22px 14px;
-  text-align: center;
-  background: var(--el-fill-color-lighter);
-  transition: border-color 0.15s, background-color 0.15s;
-  &:hover {
-    border-color: var(--el-color-primary);
-    background: var(--el-color-primary-light-9);
-  }
-  .drop-ic {
-    font-size: 30px; color: var(--el-color-primary); margin-bottom: 6px;
-  }
-  .drop-text {
-    font-size: 14px;
-    color: var(--el-text-color-primary);
-    .link {
-      color: var(--el-color-primary);
-      cursor: pointer;
-      text-decoration: underline;
-      margin-left: 2px;
-    }
-  }
-  .drop-sub {
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--el-text-color-secondary);
-  }
 }
 
 .file-list {

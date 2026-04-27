@@ -3,8 +3,6 @@ package settings
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/432539/gpt2api/internal/audit"
-	"github.com/432539/gpt2api/internal/middleware"
 	"github.com/432539/gpt2api/pkg/mailer"
 	"github.com/432539/gpt2api/pkg/resp"
 )
@@ -16,13 +14,12 @@ import (
 //   - TestMail POST /api/admin/settings/test-email 管理员给任意地址发一封测试邮件
 //   - Public  GET  /api/public/site-info        匿名可访问,返回 Public=true 的子集
 type Handler struct {
-	svc      *Service
-	mail     *mailer.Mailer
-	auditDAO *audit.DAO
+	svc  *Service
+	mail *mailer.Mailer
 }
 
-func NewHandler(svc *Service, mail *mailer.Mailer, adao *audit.DAO) *Handler {
-	return &Handler{svc: svc, mail: mail, auditDAO: adao}
+func NewHandler(svc *Service, mail *mailer.Mailer, _ any) *Handler {
+	return &Handler{svc: svc, mail: mail}
 }
 
 // itemView 给前端使用的完整条目(带 schema,便于统一渲染)。
@@ -80,20 +77,6 @@ func (h *Handler) Update(c *gin.Context) {
 	if err := h.svc.Set(c.Request.Context(), req.Items); err != nil {
 		resp.Internal(c, err.Error())
 		return
-	}
-	if h.auditDAO != nil {
-		actor := middleware.UserID(c)
-		if actor > 0 {
-			_ = h.auditDAO.Insert(c.Request.Context(), &audit.Log{
-				ActorID: actor,
-				Action:  "settings.update",
-				Method:  c.Request.Method,
-				Path:    c.FullPath(),
-				Target:  sprintKeys(req.Items),
-				IP:      c.ClientIP(),
-				UA:      c.Request.UserAgent(),
-			})
-		}
 	}
 	resp.OK(c, gin.H{"updated": len(req.Items)})
 }

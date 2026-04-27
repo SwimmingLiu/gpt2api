@@ -7,7 +7,7 @@ import path from 'node:path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiBase = env.VITE_API_BASE || 'http://localhost:8080'
+  const apiBase = env.VITE_API_BASE || 'http://localhost:18080'
   return {
     resolve: {
       alias: {
@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
         // 开发期统一经本地代理,避免 CORS;生产由 nginx / ingress 承担
         '/api': { target: apiBase, changeOrigin: true },
         '/v1': { target: apiBase, changeOrigin: true },
+        '/p': { target: apiBase, changeOrigin: true },
         '/healthz': { target: apiBase, changeOrigin: true },
       },
     },

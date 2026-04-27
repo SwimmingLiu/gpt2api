@@ -33,6 +33,7 @@ const (
 	ErrPOWFailed       = "pow_failed"
 	ErrTurnstile       = "turnstile_required"
 	ErrUpstream        = "upstream_error"
+	ErrPreviewOnly     = "preview_only" // 非灰度桶,未产出 IMG2 终稿
 	ErrPollTimeout     = "poll_timeout"
 	ErrDownload        = "download_failed"
 	ErrInvalidResponse = "invalid_response"
@@ -55,8 +56,6 @@ type Task struct {
 	FileIDs         []byte     `db:"file_ids"         json:"-"`
 	ResultURLs      []byte     `db:"result_urls"      json:"-"`
 	Error           string     `db:"error"            json:"error"`
-	EstimatedCredit int64      `db:"estimated_credit" json:"estimated_credit"`
-	CreditCost      int64      `db:"credit_cost"      json:"credit_cost"`
 	CreatedAt       time.Time  `db:"created_at"       json:"created_at"`
 	StartedAt       *time.Time `db:"started_at"       json:"started_at"`
 	FinishedAt      *time.Time `db:"finished_at"      json:"finished_at"`
@@ -70,7 +69,6 @@ type Result struct {
 	Images         []ResultImage  `json:"images,omitempty"`
 	ErrorCode      string         `json:"error_code,omitempty"`
 	ErrorMessage   string         `json:"error_message,omitempty"`
-	CreditCost     int64          `json:"credit_cost"`
 }
 
 // ResultImage 单张生图。

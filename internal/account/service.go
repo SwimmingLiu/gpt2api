@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,55 +15,77 @@ import (
 
 // Service 账号池业务。
 type Service struct {
-	dao    *DAO
-	cipher *crypto.AESGCM
+	dao      *DAO
+	cipher   *crypto.AESGCM
+	bindPool func(ctx context.Context, poolID, accountID uint64) error
 }
 
 func NewService(dao *DAO, cipher *crypto.AESGCM) *Service {
 	return &Service{dao: dao, cipher: cipher}
 }
 
+// SetPoolBinder 注入账号池服务,供导入时做默认归池。
+func (s *Service) SetPoolBinder(fn func(ctx context.Context, poolID, accountID uint64) error) {
+	s.bindPool = fn
+}
+
 // CreateInput 新增账号入参(明文敏感字段)。
 type CreateInput struct {
-	Email            string    `json:"email"`
-	AuthToken        string    `json:"auth_token"`
-	RefreshToken     string    `json:"refresh_token"`
-	SessionToken     string    `json:"session_token"`
-	TokenExpiresAt   time.Time `json:"token_expires_at"`
-	OAISessionID     string    `json:"oai_session_id"`
-	OAIDeviceID      string    `json:"oai_device_id"`
-	ClientID         string    `json:"client_id"`
-	ChatGPTAccountID string    `json:"chatgpt_account_id"`
-	AccountType      string    `json:"account_type"`
-	PlanType         string    `json:"plan_type"`
-	DailyImageQuota  int       `json:"daily_image_quota"`
-	Notes            string    `json:"notes"`
-	Cookies          string    `json:"cookies"`
-	ProxyID          uint64    `json:"proxy_id"` // 可选:立即绑定
+	Email            string `json:"email"`
+	AuthToken        string `json:"auth_token"`
+	RefreshToken     string `json:"refresh_token"`
+	SessionToken     string `json:"session_token"`
+	TokenExpiresAt   string `json:"token_expires_at"`
+	OAISessionID     string `json:"oai_session_id"`
+	OAIDeviceID      string `json:"oai_device_id"`
+	ClientID         string `json:"client_id"`
+	ChatGPTAccountID string `json:"chatgpt_account_id"`
+	AccountType      string `json:"account_type"`
+	PlanType         string `json:"plan_type"`
+	DailyImageQuota  int    `json:"daily_image_quota"`
+	Notes            string `json:"notes"`
+	Cookies          string `json:"cookies"`
+	ProxyID          uint64 `json:"proxy_id"` // 可选:立即绑定
 }
 
 // UpdateInput 更新入参。AuthToken/RefreshToken/SessionToken/Cookies 为空串表示不改。
 type UpdateInput struct {
-	Email            string    `json:"email"`
-	AuthToken        string    `json:"auth_token"`
-	RefreshToken     string    `json:"refresh_token"`
-	SessionToken     string    `json:"session_token"`
-	TokenExpiresAt   time.Time `json:"token_expires_at"`
-	OAISessionID     string    `json:"oai_session_id"`
-	OAIDeviceID      string    `json:"oai_device_id"`
-	ClientID         string    `json:"client_id"`
-	ChatGPTAccountID string    `json:"chatgpt_account_id"`
-	AccountType      string    `json:"account_type"`
-	PlanType         string    `json:"plan_type"`
-	DailyImageQuota  int       `json:"daily_image_quota"`
-	Status           string    `json:"status"`
-	Notes            string    `json:"notes"`
-	Cookies          string    `json:"cookies"`
+	Email            string `json:"email"`
+	AuthToken        string `json:"auth_token"`
+	RefreshToken     string `json:"refresh_token"`
+	SessionToken     string `json:"session_token"`
+	TokenExpiresAt   string `json:"token_expires_at"`
+	OAISessionID     string `json:"oai_session_id"`
+	OAIDeviceID      string `json:"oai_device_id"`
+	ClientID         string `json:"client_id"`
+	ChatGPTAccountID string `json:"chatgpt_account_id"`
+	AccountType      string `json:"account_type"`
+	PlanType         string `json:"plan_type"`
+	DailyImageQuota  int    `json:"daily_image_quota"`
+	Status           string `json:"status"`
+	Notes            string `json:"notes"`
+	Cookies          string `json:"cookies"`
+}
+
+func parseOptionalRFC3339(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("token_expires_at 格式错误,需要 RFC3339: %w", err)
+	}
+	return ts, nil
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Account, error) {
 	if in.Email == "" || in.AuthToken == "" {
 		return nil, errors.New("email 和 auth_token 不能为空")
+	}
+	expAt, err := parseOptionalRFC3339(in.TokenExpiresAt)
+	if err != nil {
+		return nil, err
 	}
 	atEnc, err := s.cipher.EncryptString(in.AuthToken)
 	if err != nil {
@@ -104,8 +128,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Account, error) 
 		PlanType: in.PlanType, DailyImageQuota: in.DailyImageQuota,
 		Status: StatusHealthy, Notes: in.Notes,
 	}
-	if !in.TokenExpiresAt.IsZero() {
-		a.TokenExpiresAt = sql.NullTime{Time: in.TokenExpiresAt, Valid: true}
+	if !expAt.IsZero() {
+		a.TokenExpiresAt = sql.NullTime{Time: expAt, Valid: true}
 	} else {
 		// 自动从 JWT 解析 exp
 		if exp := parseJWTExp(in.AuthToken); !exp.IsZero() {
@@ -139,6 +163,10 @@ func (s *Service) Update(ctx context.Context, id uint64, in UpdateInput) (*Accou
 	if err != nil {
 		return nil, err
 	}
+	expAt, err := parseOptionalRFC3339(in.TokenExpiresAt)
+	if err != nil {
+		return nil, err
+	}
 	if in.Email != "" {
 		a.Email = in.Email
 	}
@@ -163,8 +191,8 @@ func (s *Service) Update(ctx context.Context, id uint64, in UpdateInput) (*Accou
 		}
 		a.SessionTokenEnc = sql.NullString{String: enc, Valid: true}
 	}
-	if !in.TokenExpiresAt.IsZero() {
-		a.TokenExpiresAt = sql.NullTime{Time: in.TokenExpiresAt, Valid: true}
+	if !expAt.IsZero() {
+		a.TokenExpiresAt = sql.NullTime{Time: expAt, Valid: true}
 	} else if in.AuthToken != "" {
 		if exp := parseJWTExp(in.AuthToken); !exp.IsZero() {
 			a.TokenExpiresAt = sql.NullTime{Time: exp, Valid: true}
@@ -226,8 +254,8 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Account, error) {
 	return s.dao.GetByID(ctx, id)
 }
 
-func (s *Service) List(ctx context.Context, status, keyword string, offset, limit int) ([]*Account, int64, error) {
-	return s.dao.List(ctx, status, keyword, offset, limit)
+func (s *Service) List(ctx context.Context, status, keyword string, poolID uint64, offset, limit int) ([]*Account, int64, error) {
+	return s.dao.List(ctx, status, keyword, poolID, offset, limit)
 }
 
 // BindProxy 绑定代理(一号一代理)。

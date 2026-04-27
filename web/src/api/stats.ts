@@ -53,7 +53,6 @@ export interface Overall {
   image_images: number
   input_tokens: number
   output_tokens: number
-  credit_cost: number
 }
 
 export interface DailyPoint {
@@ -63,7 +62,6 @@ export interface DailyPoint {
   input_tokens: number
   output_tokens: number
   image_count: number
-  credit_cost: number
 }
 
 export interface ModelStat {
@@ -75,7 +73,6 @@ export interface ModelStat {
   input_tokens: number
   output_tokens: number
   image_count: number
-  credit_cost: number
   avg_dur_ms: number
 }
 
@@ -84,7 +81,6 @@ export interface UserStat {
   email: string
   requests: number
   failures: number
-  credit_cost: number
 }
 
 export interface StatsResp {

@@ -16,7 +16,7 @@ import "strings"
 type KeyDef struct {
 	Key      string
 	Type     string // "string" | "bool" | "int" | "float" | "email" | "url"
-	Category string // "site" | "auth" | "defaults" | "gateway" | "billing" | "mail"
+	Category string // "site" | "auth" | "defaults" | "gateway" | "mail"
 	Default  string
 	Label    string
 	Desc     string
@@ -45,13 +45,10 @@ const (
 	AuthJWTAccessTTLSec     = "auth.jwt_access_ttl_sec"
 	AuthJWTRefreshTTLSec    = "auth.jwt_refresh_ttl_sec"
 
-	// 用户默认值(旧 auth.* 保留兼容)
-	AuthDefaultGroupID       = "auth.default_group_id"
-	AuthSignupBonusCredits   = "auth.signup_bonus_credits"
-	LimitDefaultRPM          = "limit.default_rpm"
-	LimitDefaultTPM          = "limit.default_tpm"
-	KeyDefaultDailyQuota     = "key.default_daily_quota_credits"
-	KeyMaxPerUser            = "key.max_per_user"
+	// 用户默认值
+	AuthDefaultGroupID = "auth.default_group_id"
+	LimitDefaultRPM    = "limit.default_rpm"
+	LimitDefaultTPM    = "limit.default_tpm"
 
 	// 网关与调度
 	GatewayUpstreamTimeoutSec = "gateway.upstream_timeout_sec"
@@ -79,15 +76,6 @@ const (
 	AccountQuotaProbeIntervalSec = "account.quota_probe_interval_sec"
 	AccountDefaultClientID       = "account.default_client_id"
 
-	// 计费与充值
-	BillingCreditPerCNY         = "billing.credit_per_cny"
-	BillingNotifyAdminOnAdjust  = "billing.notify_admin_on_adjust"
-	RechargeEnabled             = "recharge.enabled"
-	RechargeMinCNY              = "recharge.min_cny"
-	RechargeMaxCNY              = "recharge.max_cny"
-	RechargeDailyLimitCNY       = "recharge.daily_limit_cny"
-	RechargeOrderExpireMinutes  = "recharge.order_expire_minutes"
-
 	// 邮件
 	MailEnabledDisplay = "mail.enabled_display"
 )
@@ -105,7 +93,7 @@ var Defs = []KeyDef{
 	{Key: UIDefaultPageSize, Type: "int", Category: "site", Default: "20", Label: "默认每页条数", Desc: "后台表格默认分页(5~100)"},
 
 	// ---------- 安全与认证 ----------
-	{Key: AuthAllowRegister, Type: "bool", Category: "auth", Default: "true", Label: "开放注册", Desc: "关闭后仅管理员可创建用户", Public: true},
+	{Key: AuthAllowRegister, Type: "bool", Category: "auth", Default: "false", Label: "开放注册", Desc: "关闭后仅管理员可创建用户;空库首位注册仍会自动 bootstrap admin", Public: true},
 	{Key: AuthRequireEmailVerify, Type: "bool", Category: "auth", Default: "false", Label: "邮箱验证", Desc: "注册时必须验证邮箱(预留;尚未实装)"},
 	{Key: AuthEmailDomainWhitelist, Type: "string", Category: "auth", Default: "", Label: "邮箱域名白名单", Desc: "逗号分隔,如 qq.com,gmail.com;留空=不限"},
 	{Key: AuthPasswordMinLength, Type: "int", Category: "auth", Default: "6", Label: "密码最小长度", Desc: "注册/改密时强制校验(6~64)"},
@@ -116,11 +104,8 @@ var Defs = []KeyDef{
 
 	// ---------- 用户默认值 ----------
 	{Key: AuthDefaultGroupID, Type: "int", Category: "defaults", Default: "1", Label: "默认分组 ID", Desc: "新用户自动加入的分组(对应 user_groups.id)"},
-	{Key: AuthSignupBonusCredits, Type: "int", Category: "defaults", Default: "0", Label: "注册赠送积分", Desc: "单位:厘,10000 = 1 积分"},
 	{Key: LimitDefaultRPM, Type: "int", Category: "defaults", Default: "60", Label: "默认 RPM", Desc: "未被 key/group 覆盖时生效"},
 	{Key: LimitDefaultTPM, Type: "int", Category: "defaults", Default: "60000", Label: "默认 TPM", Desc: ""},
-	{Key: KeyDefaultDailyQuota, Type: "int", Category: "defaults", Default: "0", Label: "API Key 默认日配额", Desc: "单位:厘;0=不限"},
-	{Key: KeyMaxPerUser, Type: "int", Category: "defaults", Default: "20", Label: "单用户最多 Key 数", Desc: "0=不限"},
 
 	// ---------- 网关与调度 ----------
 	{Key: GatewayUpstreamTimeoutSec, Type: "int", Category: "gateway", Default: "60", Label: "上游请求超时(秒)", Desc: "非流式请求上游响应超时"},
@@ -147,15 +132,6 @@ var Defs = []KeyDef{
 	{Key: AccountQuotaProbeEnabled, Type: "bool", Category: "gateway", Default: "true", Label: "账号额度自动探测", Desc: "后台定期查询账号的图片剩余额度"},
 	{Key: AccountQuotaProbeIntervalSec, Type: "int", Category: "gateway", Default: "18000", Label: "额度探测最小间隔(秒)", Desc: "同一账号两次探测的最小间隔,默认 **18000=5 小时**;当账号剩余额度=0 且已过重置时间时,会忽略此间隔立即补探一次,以第一时间反映真实恢复额度"},
 	{Key: AccountDefaultClientID, Type: "string", Category: "gateway", Default: "app_EMoamEEZ73f0CkXaXp7hrann", Label: "导入账号默认 client_id", Desc: "JSON 未指定时使用的 OAuth client_id"},
-
-	// ---------- 计费与充值 ----------
-	{Key: BillingCreditPerCNY, Type: "int", Category: "billing", Default: "10000", Label: "1 元 = N 积分·厘", Desc: "展示用换算;默认 10000"},
-	{Key: BillingNotifyAdminOnAdjust, Type: "bool", Category: "billing", Default: "false", Label: "调账邮件通知", Desc: "管理员调账时邮件通知超管(预留)"},
-	{Key: RechargeEnabled, Type: "bool", Category: "billing", Default: "true", Label: "启用充值", Desc: "关闭后前端隐藏充值菜单,下单接口返回 403", Public: true},
-	{Key: RechargeMinCNY, Type: "int", Category: "billing", Default: "100", Label: "最低金额(分)", Desc: "100 = 1 元"},
-	{Key: RechargeMaxCNY, Type: "int", Category: "billing", Default: "0", Label: "最高金额(分)", Desc: "0=不限"},
-	{Key: RechargeDailyLimitCNY, Type: "int", Category: "billing", Default: "0", Label: "单用户每日上限(分)", Desc: "0=不限;按今日已支付订单金额累计"},
-	{Key: RechargeOrderExpireMinutes, Type: "int", Category: "billing", Default: "30", Label: "订单有效期(分钟)", Desc: "到期未支付自动取消"},
 
 	// ---------- 邮件 ----------
 	{Key: MailEnabledDisplay, Type: "string", Category: "mail", Default: "auto", Label: "邮件开关展示", Desc: "auto/true/false;实际是否发邮件由 SMTP 配置决定"},
