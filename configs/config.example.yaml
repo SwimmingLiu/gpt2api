@@ -58,16 +58,6 @@ upstream:
   request_timeout_sec: 60
   sse_read_timeout_sec: 300
 
-# 支付(易支付)
-epay:
-  gateway_url: ""
-  pid: ""
-  key: ""
-  notify_url: ""
-  return_url: ""
-  sign_type: "MD5"
-  expires_min: 30
-
 smtp:
   host: ""
   port: 465

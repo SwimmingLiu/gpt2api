@@ -19,8 +19,6 @@ type Config struct {
 	Security  SecurityConfig  `mapstructure:"security"`
 	Scheduler SchedulerConfig `mapstructure:"scheduler"`
 	Upstream  UpstreamConfig  `mapstructure:"upstream"`
-	EPay      EPayConfig      `mapstructure:"epay"`
-	Backup    BackupConfig    `mapstructure:"backup"`
 	SMTP      SMTPConfig      `mapstructure:"smtp"`
 }
 
@@ -87,33 +85,7 @@ type UpstreamConfig struct {
 	SSEReadTimeoutSec  int    `mapstructure:"sse_read_timeout_sec"`
 }
 
-// BackupConfig 数据库备份配置。
-type BackupConfig struct {
-	Dir           string `mapstructure:"dir"`            // 备份落盘目录,默认 /app/data/backups
-	Retention     int    `mapstructure:"retention"`      // 保留最近 N 个(>0),0 表示不自动清理
-	MysqldumpBin  string `mapstructure:"mysqldump_bin"`  // 默认 mysqldump
-	MysqlBin      string `mapstructure:"mysql_bin"`      // 恢复用,默认 mysql
-	MaxUploadMB   int    `mapstructure:"max_upload_mb"`  // 上传 .sql.gz 上限,默认 512
-	AllowRestore  bool   `mapstructure:"allow_restore"`  // 是否允许 /restore 端点(生产强烈建议 false 手动切)
-}
-
-type EPayConfig struct {
-	// GatewayURL 形如 https://pay.example.com/submit.php
-	// 空字符串时整个充值通道被视为未启用,前端 list 会提示运维未配置。
-	GatewayURL string `mapstructure:"gateway_url"`
-	PID        string `mapstructure:"pid"`
-	Key        string `mapstructure:"key"`
-	// NotifyURL 后端异步回调(必填完整 https,不要带 query)
-	NotifyURL string `mapstructure:"notify_url"`
-	// ReturnURL 支付成功浏览器跳回(前端路由页,如 /billing)
-	ReturnURL string `mapstructure:"return_url"`
-	// SignType 目前只支持 MD5,保留扩展位。
-	SignType string `mapstructure:"sign_type"`
-	// Expires 订单默认有效期(分钟),0 取默认 30
-	ExpiresMin int `mapstructure:"expires_min"`
-}
-
-// SMTPConfig 用于注册欢迎 / 充值到账 邮件通知。
+// SMTPConfig 用于注册欢迎邮件通知。
 // Host 为空时邮件通道整体关闭,不影响主流程。
 type SMTPConfig struct {
 	Host     string `mapstructure:"host"`
