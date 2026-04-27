@@ -141,13 +141,6 @@ func (s *Service) DefaultGroupID() uint64 {
 	}
 	return uint64(n)
 }
-func (s *Service) SignupBonusCredits() int64 {
-	n := s.GetInt(AuthSignupBonusCredits)
-	if n < 0 {
-		return 0
-	}
-	return n
-}
 func (s *Service) PasswordMinLength() int {
 	n := int(s.GetInt(AuthPasswordMinLength))
 	if n < 1 {
@@ -194,10 +187,6 @@ func (s *Service) JWTRefreshTTLSec() int {
 	}
 	return n
 }
-
-// -- key defaults --
-func (s *Service) KeyDefaultDailyQuota() int64 { n := s.GetInt(KeyDefaultDailyQuota); if n < 0 { return 0 }; return n }
-func (s *Service) KeyMaxPerUser() int          { return int(s.GetInt(KeyMaxPerUser)) }
 
 // -- gateway --
 func (s *Service) GatewayUpstreamTimeoutSec() int { n := int(s.GetInt(GatewayUpstreamTimeoutSec)); if n <= 0 { return 60 }; return n }
@@ -303,19 +292,6 @@ func (s *Service) AccountQuotaProbeIntervalSec() int {
 }
 func (s *Service) AccountDefaultClientID() string {
 	return firstNonEmpty(s.GetString(AccountDefaultClientID), "app_EMoamEEZ73f0CkXaXp7hrann")
-}
-
-// -- billing / recharge --
-func (s *Service) RechargeEnabled() bool    { return s.GetBool(RechargeEnabled) }
-func (s *Service) RechargeMinCNY() int64    { n := s.GetInt(RechargeMinCNY); if n < 0 { return 0 }; return n }
-func (s *Service) RechargeMaxCNY() int64    { n := s.GetInt(RechargeMaxCNY); if n < 0 { return 0 }; return n }
-func (s *Service) RechargeDailyLimitCNY() int64 { n := s.GetInt(RechargeDailyLimitCNY); if n < 0 { return 0 }; return n }
-func (s *Service) RechargeOrderExpireMin() int {
-	n := int(s.GetInt(RechargeOrderExpireMinutes))
-	if n <= 0 {
-		return 30
-	}
-	return n
 }
 
 func firstNonEmpty(vs ...string) string {

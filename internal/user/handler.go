@@ -1,8 +1,6 @@
 package user
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/432539/gpt2api/internal/middleware"
@@ -62,34 +60,5 @@ func (h *Handler) Menu(c *gin.Context) {
 		"role":        u.Role,
 		"menu":        rbac.MenuForRole(u.Role),
 		"permissions": rbac.ListPermissions(u.Role),
-	})
-}
-
-// CreditLogs GET /api/me/credit-logs
-// 当前登录用户的积分流水(只读、强制 user_id = 当前用户)。
-func (h *Handler) CreditLogs(c *gin.Context) {
-	uid := middleware.UserID(c)
-	if uid == 0 {
-		resp.Unauthorized(c, "not logged in")
-		return
-	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	items, total, err := h.dao.ListCreditLogs(c.Request.Context(), uid, limit, offset)
-	if err != nil {
-		resp.Internal(c, err.Error())
-		return
-	}
-	resp.OK(c, gin.H{
-		"items":  items,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
 	})
 }

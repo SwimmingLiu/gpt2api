@@ -6,20 +6,14 @@ import (
 	"github.com/432539/gpt2api/internal/account"
 	"github.com/432539/gpt2api/internal/accountpool"
 	"github.com/432539/gpt2api/internal/accountsource"
-	"github.com/432539/gpt2api/internal/apikey"
-	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/internal/auth"
-	"github.com/432539/gpt2api/internal/backup"
 	"github.com/432539/gpt2api/internal/config"
 	"github.com/432539/gpt2api/internal/gateway"
-	"github.com/432539/gpt2api/internal/image"
 	"github.com/432539/gpt2api/internal/middleware"
 	"github.com/432539/gpt2api/internal/model"
 	"github.com/432539/gpt2api/internal/proxy"
 	"github.com/432539/gpt2api/internal/rbac"
-	"github.com/432539/gpt2api/internal/recharge"
 	"github.com/432539/gpt2api/internal/settings"
-	"github.com/432539/gpt2api/internal/usage"
 	"github.com/432539/gpt2api/internal/user"
 	pkgjwt "github.com/432539/gpt2api/pkg/jwt"
 	"github.com/432539/gpt2api/pkg/resp"
@@ -33,32 +27,14 @@ type Deps struct {
 	AuthH *auth.Handler
 	UserH *user.Handler
 
-	KeySvc         *apikey.Service
-	KeyH           *apikey.Handler
 	ProxyH         *proxy.Handler
 	AccountH       *account.Handler
 	AccountPoolH   *accountpool.Handler
 	AccountSourceH *accountsource.Handler
 
 	GatewayH *gateway.Handler
-	ImagesH  *gateway.ImagesHandler
-
-	BackupH     *backup.Handler
-	AuditH      *audit.Handler
-	AuditDAO    *audit.DAO
-	AdminUserH  *user.AdminHandler
-	AdminGroupH *user.AdminGroupHandler
-
 	AdminModelH *model.AdminHandler
-	AdminKeyH   *apikey.AdminHandler
-	AdminUsageH *usage.AdminHandler
-
-	// 生成面板:当前用户视角的 usage / image 只读接口
-	MeUsageH *usage.MeHandler
-	MeImageH *image.MeHandler
-
-	RechargeH      *recharge.Handler
-	AdminRechargeH *recharge.AdminHandler
+	ImagesH      *gateway.ImagesHandler
 
 	SettingsH *settings.Handler
 }
@@ -99,10 +75,6 @@ func New(d *Deps) *gin.Engine {
 			middleware.JWTAuth(d.JWT),
 			middleware.RequireAdmin(),
 		}
-		if d.AuditDAO != nil {
-			adminMW = append(adminMW, audit.Middleware(d.AuditDAO))
-		}
-
 		admin := api.Group("/admin", adminMW...)
 		{
 			admin.GET("/ping", func(c *gin.Context) { resp.OK(c, gin.H{"msg": "admin pong"}) })

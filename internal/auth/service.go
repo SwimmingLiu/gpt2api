@@ -7,7 +7,6 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/432539/gpt2api/internal/billing"
 	"github.com/432539/gpt2api/internal/settings"
 	"github.com/432539/gpt2api/internal/user"
 	pkgjwt "github.com/432539/gpt2api/pkg/jwt"
@@ -33,10 +32,7 @@ type Service struct {
 	mail    *mailer.Mailer // 可为 nil;为 nil 时不发邮件
 	baseURL string
 
-	// 以下两个用于注册开关 / 赠送积分,均为可选依赖。
-	// 未注入时:允许注册(兼容旧行为),不发放赠送积分。
 	settings *settings.Service
-	billing  *billing.Engine
 }
 
 func NewService(udao *user.DAO, jm *pkgjwt.Manager, bcryptCost int) *Service {
@@ -55,9 +51,6 @@ func (s *Service) SetMailer(m *mailer.Mailer, baseURL string) {
 
 // SetSettings 注入系统设置服务(用于注册开关 / 默认分组)。
 func (s *Service) SetSettings(ss *settings.Service) { s.settings = ss }
-
-// SetBilling 注入计费引擎(用于注册赠送积分)。
-func (s *Service) SetBilling(b *billing.Engine) { s.billing = b }
 
 // Register 新用户注册。
 func (s *Service) Register(ctx context.Context, email, password, nickname string) (*user.User, error) {
@@ -126,13 +119,6 @@ func (s *Service) Register(ctx context.Context, email, password, nickname string
 		return nil, err
 	}
 	u.ID = id
-
-	// 注册赠送积分(失败不阻断注册流程,仅打日志)
-	if s.settings != nil && s.billing != nil {
-		if bonus := s.settings.SignupBonusCredits(); bonus > 0 {
-			_, _ = s.billing.AdminAdjust(ctx, u.ID, 0, bonus, "signup_bonus", "auto grant on register")
-		}
-	}
 
 	// 欢迎邮件(可选,失败不影响注册)
 	if s.mail != nil && !s.mail.Disabled() {

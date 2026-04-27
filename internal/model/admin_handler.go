@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	mysqlDrv "github.com/go-sql-driver/mysql"
 
-	"github.com/432539/gpt2api/internal/audit"
 	"github.com/432539/gpt2api/pkg/resp"
 )
 
@@ -21,12 +20,11 @@ var slugRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._\-]{1,63}$`)
 type AdminHandler struct {
 	dao      *DAO
 	registry *Registry
-	auditDAO *audit.DAO
 }
 
-// NewAdminHandler registry 与 auditDAO 可为 nil(不做缓存刷新/审计)。
-func NewAdminHandler(dao *DAO, registry *Registry, auditDAO *audit.DAO) *AdminHandler {
-	return &AdminHandler{dao: dao, registry: registry, auditDAO: auditDAO}
+// NewAdminHandler 仅保留 registry 刷新。
+func NewAdminHandler(dao *DAO, registry *Registry, _ any) *AdminHandler {
+	return &AdminHandler{dao: dao, registry: registry}
 }
 
 // ---- 请求体 ----
@@ -125,9 +123,6 @@ func (h *AdminHandler) Create(c *gin.Context) {
 		return
 	}
 	h.reloadRegistry(c)
-	audit.Record(c, h.auditDAO, "models.create", strconv.FormatUint(m.ID, 10), gin.H{
-		"slug": m.Slug, "type": m.Type,
-	})
 	resp.OK(c, m)
 }
 
@@ -171,9 +166,6 @@ func (h *AdminHandler) Update(c *gin.Context) {
 		return
 	}
 	h.reloadRegistry(c)
-	audit.Record(c, h.auditDAO, "models.update", strconv.FormatUint(id, 10), gin.H{
-		"slug": cur.Slug,
-	})
 	resp.OK(c, cur)
 }
 
@@ -200,9 +192,6 @@ func (h *AdminHandler) SetEnabled(c *gin.Context) {
 		return
 	}
 	h.reloadRegistry(c)
-	audit.Record(c, h.auditDAO, "models.set_enabled", strconv.FormatUint(id, 10), gin.H{
-		"enabled": body.Enabled,
-	})
 	resp.OK(c, gin.H{"id": id, "enabled": body.Enabled})
 }
 
@@ -222,7 +211,6 @@ func (h *AdminHandler) Delete(c *gin.Context) {
 		return
 	}
 	h.reloadRegistry(c)
-	audit.Record(c, h.auditDAO, "models.delete", strconv.FormatUint(id, 10), nil)
 	resp.OK(c, gin.H{"deleted": id})
 }
 
