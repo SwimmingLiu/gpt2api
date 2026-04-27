@@ -129,7 +129,6 @@ func (h *ImagesHandler) ImageGenerations(c *gin.Context) {
 		N:               req.N,
 		Size:            req.Size,
 		Status:          image.StatusDispatched,
-		EstimatedCredit: 0,
 	}
 	if h.DAO != nil {
 		if err := h.DAO.Create(c.Request.Context(), task); err != nil {

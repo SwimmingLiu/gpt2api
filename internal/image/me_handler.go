@@ -43,7 +43,6 @@ type taskView struct {
 	Status         string     `json:"status"`
 	ConversationID string     `json:"conversation_id,omitempty"`
 	Error          string     `json:"error,omitempty"`
-	CreditCost     int64      `json:"credit_cost"`
 	ImageURLs      []string   `json:"image_urls"`
 	FileIDs        []string   `json:"file_ids,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -74,7 +73,7 @@ func toView(t *Task, builder URLBuilder) taskView {
 		ID: t.ID, TaskID: t.TaskID, UserID: t.UserID, ModelID: t.ModelID,
 		AccountID: t.AccountID, Prompt: t.Prompt, N: t.N, Size: t.Size,
 		Status: t.Status, ConversationID: t.ConversationID, Error: t.Error,
-		CreditCost: t.CreditCost, ImageURLs: urls, FileIDs: fids,
+		ImageURLs: urls, FileIDs: fids,
 		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
 	}
 }
