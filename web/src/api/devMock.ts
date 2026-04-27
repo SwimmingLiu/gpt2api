@@ -58,8 +58,6 @@ const mockUser = {
   role: 'admin',
   status: 'active',
   group_id: 1,
-  credit_balance: 999999,
-  credit_frozen: 0,
 }
 
 const mockPermissions = [

@@ -106,13 +106,12 @@ func (s *Service) Register(ctx context.Context, email, password, nickname string
 	}
 
 	u := &user.User{
-		Email:         email,
-		PasswordHash:  string(hash),
-		Nickname:      nickname,
-		GroupID:       groupID,
-		Role:          role,
-		Status:        "active",
-		CreditBalance: 0,
+		Email:        email,
+		PasswordHash: string(hash),
+		Nickname:     nickname,
+		GroupID:      groupID,
+		Role:         role,
+		Status:       "active",
 	}
 	id, err := s.users.Create(ctx, u)
 	if err != nil {
